@@ -2,7 +2,7 @@
 
 #### Junwei Jiang, Xiangda Shen, Yuning Gong, Zeng Fan, Yanli Liu, Guanyu Xing, Xiaohua Ren, Yanci Zhang
 
-#### Accepted by ACM SIGGRAPH / Eurographics Symposium on Computer Animation 2022 / CGF
+#### Accepted by ACM SIGGRAPH / Eurographics Symposium on Computer Animation 2022 / Computer Graphics Forum
 
 ![image](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)
 
