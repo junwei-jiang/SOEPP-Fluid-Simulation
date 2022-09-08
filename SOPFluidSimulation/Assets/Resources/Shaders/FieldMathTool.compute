@@ -1,0 +1,676 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel sampleCCSFieldWithPosFieldLinear
+#pragma kernel sampleCCSFieldWithPosFieldCubic
+#pragma kernel sampleCCSFieldWithPosBufferLinear
+#pragma kernel sampleCCSFieldWithPosBufferCubic
+#pragma kernel clampExtrema
+#pragma kernel CCSFieldGradient
+#pragma kernel CCSFieldLaplacian
+#pragma kernel CCVFieldDivergence
+#pragma kernel FCVFieldDivergence
+#pragma kernel CCVFieldCurl
+#pragma kernel FCVFieldCurl
+#pragma kernel CCVFieldLength
+#pragma kernel FCVFieldLength
+#pragma kernel transferFCVField2CCVField
+#pragma kernel transferCCVField2FCVField
+#pragma kernel unionSDF
+#pragma kernel intersectSDF
+#pragma kernel differenceSDF
+#pragma kernel setFCVDataWithBox
+
+//TODO
+StructuredBuffer<float> vSrcSDFData1;
+StructuredBuffer<float> vSrcSDFData2;
+RWStructuredBuffer<float> voDstSDFData;
+
+float3 vBoxMin, vBoxMax;
+float3 vVectorValue;
+RWStructuredBuffer<float> vioFieldDataX;
+RWStructuredBuffer<float> vioFieldDataY;
+RWStructuredBuffer<float> vioFieldDataZ;
+
+StructuredBuffer<float> vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear;
+RWStructuredBuffer<float> voDstScalarFieldData_sampleCCSFieldWithPosFieldLinear;
+StructuredBuffer<float> vSampledAbsPosDataX_sampleCCSFieldWithPosFieldLinear;
+StructuredBuffer<float> vSampledAbsPosDataY_sampleCCSFieldWithPosFieldLinear;
+StructuredBuffer<float> vSampledAbsPosDataZ_sampleCCSFieldWithPosFieldLinear;
+int DataSpan_sampleCCSFieldWithPosFieldLinear = 1;
+int DataOffset_sampleCCSFieldWithPosFieldLinear = 0;
+[numthreads(NUMTHREADS, 1, 1)]
+void sampleCCSFieldWithPosFieldLinear(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    float SampledRelPosX = vSampledAbsPosDataX_sampleCCSFieldWithPosFieldLinear[CurLinearIndex] - GridOrigin.x - GridSpacing.x / 2;
+    float SampledRelPosY = vSampledAbsPosDataY_sampleCCSFieldWithPosFieldLinear[CurLinearIndex] - GridOrigin.y - GridSpacing.y / 2;
+    float SampledRelPosZ = vSampledAbsPosDataZ_sampleCCSFieldWithPosFieldLinear[CurLinearIndex] - GridOrigin.z - GridSpacing.z / 2;
+
+    float TempDownBackLeftIndexX = SampledRelPosX / GridSpacing.x;
+    float TempDownBackLeftIndexY = SampledRelPosY / GridSpacing.y;
+    float TempDownBackLeftIndexZ = SampledRelPosZ / GridSpacing.z;
+
+    int3 DownBackLeftIndex = int3(floorCS(TempDownBackLeftIndexX), floorCS(TempDownBackLeftIndexY), floorCS(TempDownBackLeftIndexZ));
+
+    float OffsetRatioX = (SampledRelPosX - (DownBackLeftIndex.x * GridSpacing.x)) / GridSpacing.x;
+    float OffsetRatioY = (SampledRelPosY - (DownBackLeftIndex.y * GridSpacing.y)) / GridSpacing.y;
+    float OffsetRatioZ = (SampledRelPosZ - (DownBackLeftIndex.z * GridSpacing.z)) / GridSpacing.z;
+
+    float UpBackLeft     = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 1, 0))];
+    float UpBackRight    = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 1, 0))];
+    float UpFrontLeft    = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 1, 1))];
+    float UpFrontRight   = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 1, 1))];
+    float DownBackLeft   = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 0, 0))];
+    float DownBackRight  = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 0, 0))];
+    float DownFrontLeft  = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 0, 1))];
+    float DownFrontRight = vSrcScalarFieldData_sampleCCSFieldWithPosFieldLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 0, 1))];
+
+    voDstScalarFieldData_sampleCCSFieldWithPosFieldLinear[DataSpan_sampleCCSFieldWithPosFieldLinear * CurLinearIndex + DataOffset_sampleCCSFieldWithPosFieldLinear] =
+		DownBackLeft * (1 - OffsetRatioX) * (1 - OffsetRatioY) * (1 - OffsetRatioZ) +
+		DownBackRight * OffsetRatioX * (1 - OffsetRatioY) * (1 - OffsetRatioZ) +
+		UpBackLeft * (1 - OffsetRatioX) * OffsetRatioY * (1 - OffsetRatioZ) +
+		UpBackRight * OffsetRatioX * OffsetRatioY * (1 - OffsetRatioZ) +
+		DownFrontLeft * (1 - OffsetRatioX) * (1 - OffsetRatioY) * OffsetRatioZ +
+		DownFrontRight * OffsetRatioX * (1 - OffsetRatioY) * OffsetRatioZ +
+		UpFrontLeft * (1 - OffsetRatioX) * OffsetRatioY * OffsetRatioZ +
+		UpFrontRight * OffsetRatioX * OffsetRatioY * OffsetRatioZ;
+}
+
+StructuredBuffer<float> vSrcScalarFieldData_sampleCCSFieldWithPosFieldCubic;
+RWStructuredBuffer<float> voDstScalarFieldData_sampleCCSFieldWithPosFieldCubic;
+StructuredBuffer<float> vSampledAbsPosDataX_sampleCCSFieldWithPosFieldCubic;
+StructuredBuffer<float> vSampledAbsPosDataY_sampleCCSFieldWithPosFieldCubic;
+StructuredBuffer<float> vSampledAbsPosDataZ_sampleCCSFieldWithPosFieldCubic;
+int DataSpan_sampleCCSFieldWithPosFieldCubic = 1;
+int DataOffset_sampleCCSFieldWithPosFieldCubic = 0;
+int SamplingAlg_sampleCCSFieldWithPosFieldCubic = 1;
+[numthreads(NUMTHREADS, 1, 1)]
+void sampleCCSFieldWithPosFieldCubic(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    float SampledRelPosX = vSampledAbsPosDataX_sampleCCSFieldWithPosFieldCubic[CurLinearIndex] - GridOrigin.x - GridSpacing.x / 2;
+    float SampledRelPosY = vSampledAbsPosDataY_sampleCCSFieldWithPosFieldCubic[CurLinearIndex] - GridOrigin.y - GridSpacing.y / 2;
+    float SampledRelPosZ = vSampledAbsPosDataZ_sampleCCSFieldWithPosFieldCubic[CurLinearIndex] - GridOrigin.z - GridSpacing.z / 2;
+
+    float TempDownBackLeftIndexX = SampledRelPosX / GridSpacing.x;
+    float TempDownBackLeftIndexY = SampledRelPosY / GridSpacing.y;
+    float TempDownBackLeftIndexZ = SampledRelPosZ / GridSpacing.z;
+
+    int3 DownBackLeftIndex = int3(floorCS(TempDownBackLeftIndexX), floorCS(TempDownBackLeftIndexY), floorCS(TempDownBackLeftIndexZ));
+
+    float OffsetRatioX = (SampledRelPosX - (DownBackLeftIndex.x * GridSpacing.x)) / GridSpacing.x;
+    float OffsetRatioY = (SampledRelPosY - (DownBackLeftIndex.y * GridSpacing.y)) / GridSpacing.y;
+    float OffsetRatioZ = (SampledRelPosZ - (DownBackLeftIndex.z * GridSpacing.z)) / GridSpacing.z;
+
+    float Value[64];
+    for (int z = 0; z < 4; z++)
+    {
+        for (int y = 0; y < 4; y++)
+        {
+            for (int x = 0; x < 4; x++)
+            {
+                Value[z * 4 * 4 + y * 4 + x] = vSrcScalarFieldData_sampleCCSFieldWithPosFieldCubic[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(x - 1, y - 1, z - 1))];
+            }
+        }
+    }
+
+    if (SamplingAlg_sampleCCSFieldWithPosFieldCubic == CATMULLROM)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosFieldCubic[DataSpan_sampleCCSFieldWithPosFieldCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosFieldCubic] = triCatmullRom(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else if (SamplingAlg_sampleCCSFieldWithPosFieldCubic == MONOCATMULLROM)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosFieldCubic[DataSpan_sampleCCSFieldWithPosFieldCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosFieldCubic] = triMonotonicCatmullRom(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else if (SamplingAlg_sampleCCSFieldWithPosFieldCubic == CUBICBRIDSON)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosFieldCubic[DataSpan_sampleCCSFieldWithPosFieldCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosFieldCubic] = triCubicBridson(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else if (SamplingAlg_sampleCCSFieldWithPosFieldCubic == CLAMPCUBICBRIDSON)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosFieldCubic[DataSpan_sampleCCSFieldWithPosFieldCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosFieldCubic] = triClampCubicBridson(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else
+    {
+
+    }
+}
+
+StructuredBuffer<float> vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear;
+RWStructuredBuffer<float> voDstScalarFieldData_sampleCCSFieldWithPosBufferLinear;
+StructuredBuffer<float> vSampledAbsPosData_sampleCCSFieldWithPosBufferLinear;
+int DataSpan_sampleCCSFieldWithPosBufferLinear = 1;
+int DataOffset_sampleCCSFieldWithPosBufferLinear = 0;
+[numthreads(NUMTHREADS, 1, 1)]
+void sampleCCSFieldWithPosBufferLinear(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    float SampledRelPosX = vSampledAbsPosData_sampleCCSFieldWithPosBufferLinear[3 * CurLinearIndex] - GridOrigin.x - GridSpacing.x / 2;
+    float SampledRelPosY = vSampledAbsPosData_sampleCCSFieldWithPosBufferLinear[3 * CurLinearIndex + 1] - GridOrigin.y - GridSpacing.y / 2;
+    float SampledRelPosZ = vSampledAbsPosData_sampleCCSFieldWithPosBufferLinear[3 * CurLinearIndex + 2] - GridOrigin.z - GridSpacing.z / 2;
+
+    float TempDownBackLeftIndexX = SampledRelPosX / GridSpacing.x;
+    float TempDownBackLeftIndexY = SampledRelPosY / GridSpacing.y;
+    float TempDownBackLeftIndexZ = SampledRelPosZ / GridSpacing.z;
+
+    int3 DownBackLeftIndex = int3(floorCS(TempDownBackLeftIndexX), floorCS(TempDownBackLeftIndexY), floorCS(TempDownBackLeftIndexZ));
+
+    float OffsetRatioX = (SampledRelPosX - (DownBackLeftIndex.x * GridSpacing.x)) / GridSpacing.x;
+    float OffsetRatioY = (SampledRelPosY - (DownBackLeftIndex.y * GridSpacing.y)) / GridSpacing.y;
+    float OffsetRatioZ = (SampledRelPosZ - (DownBackLeftIndex.z * GridSpacing.z)) / GridSpacing.z;
+
+    float UpBackLeft = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 1, 0))];
+    float UpBackRight = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 1, 0))];
+    float UpFrontLeft = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 1, 1))];
+    float UpFrontRight = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 1, 1))];
+    float DownBackLeft = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 0, 0))];
+    float DownBackRight = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 0, 0))];
+    float DownFrontLeft = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 0, 1))];
+    float DownFrontRight = vSrcScalarFieldData_sampleCCSFieldWithPosBufferLinear[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 0, 1))];
+
+    voDstScalarFieldData_sampleCCSFieldWithPosBufferLinear[DataSpan_sampleCCSFieldWithPosBufferLinear * CurLinearIndex + DataOffset_sampleCCSFieldWithPosBufferLinear] =
+		DownBackLeft * (1 - OffsetRatioX) * (1 - OffsetRatioY) * (1 - OffsetRatioZ) +
+		DownBackRight * OffsetRatioX * (1 - OffsetRatioY) * (1 - OffsetRatioZ) +
+		UpBackLeft * (1 - OffsetRatioX) * OffsetRatioY * (1 - OffsetRatioZ) +
+		UpBackRight * OffsetRatioX * OffsetRatioY * (1 - OffsetRatioZ) +
+		DownFrontLeft * (1 - OffsetRatioX) * (1 - OffsetRatioY) * OffsetRatioZ +
+		DownFrontRight * OffsetRatioX * (1 - OffsetRatioY) * OffsetRatioZ +
+		UpFrontLeft * (1 - OffsetRatioX) * OffsetRatioY * OffsetRatioZ +
+		UpFrontRight * OffsetRatioX * OffsetRatioY * OffsetRatioZ;
+}
+
+StructuredBuffer<float> vSrcScalarFieldData_sampleCCSFieldWithPosBufferCubic;
+RWStructuredBuffer<float> voDstScalarFieldData_sampleCCSFieldWithPosBufferCubic;
+StructuredBuffer<float> vSampledAbsPosData_sampleCCSFieldWithPosBufferCubic;
+int DataSpan_sampleCCSFieldWithPosBufferCubic = 1;
+int DataOffset_sampleCCSFieldWithPosBufferCubic = 0;
+int SamplingAlg_sampleCCSFieldWithPosBufferCubic = 1;
+[numthreads(NUMTHREADS, 1, 1)]
+void sampleCCSFieldWithPosBufferCubic(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    float SampledRelPosX = vSampledAbsPosData_sampleCCSFieldWithPosBufferCubic[3 * CurLinearIndex] - GridOrigin.x - GridSpacing.x / 2;
+    float SampledRelPosY = vSampledAbsPosData_sampleCCSFieldWithPosBufferCubic[3 * CurLinearIndex + 1] - GridOrigin.y - GridSpacing.y / 2;
+    float SampledRelPosZ = vSampledAbsPosData_sampleCCSFieldWithPosBufferCubic[3 * CurLinearIndex + 2] - GridOrigin.z - GridSpacing.z / 2;
+
+    float TempDownBackLeftIndexX = SampledRelPosX / GridSpacing.x;
+    float TempDownBackLeftIndexY = SampledRelPosY / GridSpacing.y;
+    float TempDownBackLeftIndexZ = SampledRelPosZ / GridSpacing.z;
+
+    int3 DownBackLeftIndex = int3(floorCS(TempDownBackLeftIndexX), floorCS(TempDownBackLeftIndexY), floorCS(TempDownBackLeftIndexZ));
+
+    float OffsetRatioX = (SampledRelPosX - (DownBackLeftIndex.x * GridSpacing.x)) / GridSpacing.x;
+    float OffsetRatioY = (SampledRelPosY - (DownBackLeftIndex.y * GridSpacing.y)) / GridSpacing.y;
+    float OffsetRatioZ = (SampledRelPosZ - (DownBackLeftIndex.z * GridSpacing.z)) / GridSpacing.z;
+
+    float Value[64];
+    for (int z = 0; z < 4; z++)
+    {
+        for (int y = 0; y < 4; y++)
+        {
+            for (int x = 0; x < 4; x++)
+            {
+                Value[z * 4 * 4 + y * 4 + x] = vSrcScalarFieldData_sampleCCSFieldWithPosBufferCubic[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(x - 1, y - 1, z - 1))];
+            }
+        }
+    }
+
+    if (SamplingAlg_sampleCCSFieldWithPosBufferCubic == CATMULLROM)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosBufferCubic[DataSpan_sampleCCSFieldWithPosBufferCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosBufferCubic] = triCatmullRom(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else if (SamplingAlg_sampleCCSFieldWithPosBufferCubic == MONOCATMULLROM)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosBufferCubic[DataSpan_sampleCCSFieldWithPosBufferCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosBufferCubic] = triMonotonicCatmullRom(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else if (SamplingAlg_sampleCCSFieldWithPosBufferCubic == CUBICBRIDSON)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosBufferCubic[DataSpan_sampleCCSFieldWithPosBufferCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosBufferCubic] = triCubicBridson(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else if (SamplingAlg_sampleCCSFieldWithPosBufferCubic == CLAMPCUBICBRIDSON)
+    {
+        voDstScalarFieldData_sampleCCSFieldWithPosBufferCubic[DataSpan_sampleCCSFieldWithPosBufferCubic * CurLinearIndex + DataOffset_sampleCCSFieldWithPosBufferCubic] = triClampCubicBridson(Value, OffsetRatioX, OffsetRatioY, OffsetRatioZ);
+    }
+    else
+    {
+
+    }
+}
+
+StructuredBuffer<float> vSrcScalarFieldData_clampExtrema;
+RWStructuredBuffer<float> vioDstScalarFieldData_clampExtrema;
+StructuredBuffer<float> vSampledAbsPosDataX_clampExtrema;
+StructuredBuffer<float> vSampledAbsPosDataY_clampExtrema;
+StructuredBuffer<float> vSampledAbsPosDataZ_clampExtrema;
+int DataSpan_clampExtrema = 1;
+int DataOffset_clampExtrema = 0;
+[numthreads(NUMTHREADS, 1, 1)]
+void clampExtrema(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    float SampledRelPosX = vSampledAbsPosDataX_clampExtrema[CurLinearIndex] - GridOrigin.x - GridSpacing.x / 2;
+    float SampledRelPosY = vSampledAbsPosDataY_clampExtrema[CurLinearIndex] - GridOrigin.y - GridSpacing.y / 2;
+    float SampledRelPosZ = vSampledAbsPosDataZ_clampExtrema[CurLinearIndex] - GridOrigin.z - GridSpacing.z / 2;
+
+    float TempDownBackLeftIndexX = SampledRelPosX / GridSpacing.x;
+    float TempDownBackLeftIndexY = SampledRelPosY / GridSpacing.y;
+    float TempDownBackLeftIndexZ = SampledRelPosZ / GridSpacing.z;
+
+    int3 DownBackLeftIndex = int3(floorCS(TempDownBackLeftIndexX), floorCS(TempDownBackLeftIndexY), floorCS(TempDownBackLeftIndexZ));
+
+    float UpBackLeft = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 1, 0))];
+    float UpBackRight = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 1, 0))];
+    float UpFrontLeft = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 1, 1))];
+    float UpFrontRight = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 1, 1))];
+    float DownBackLeft = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 0, 0))];
+    float DownBackRight = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 0, 0))];
+    float DownFrontLeft = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(0, 0, 1))];
+    float DownFrontRight = vSrcScalarFieldData_clampExtrema[transCoordIndex2LinearWithOffset(DownBackLeftIndex, GridResolution, int3(1, 0, 1))];
+    
+    float Min = min(min(min(UpBackLeft, UpBackRight), min(UpFrontLeft, UpFrontRight)), min(min(DownBackLeft, DownBackRight), min(DownFrontLeft, DownFrontRight)));
+    float Max = max(max(max(UpBackLeft, UpBackRight), max(UpFrontLeft, UpFrontRight)), max(max(DownBackLeft, DownBackRight), max(DownFrontLeft, DownFrontRight)));
+
+    vioDstScalarFieldData_clampExtrema[DataSpan_clampExtrema * CurLinearIndex + DataOffset_clampExtrema] =
+    clamp(vioDstScalarFieldData_clampExtrema[DataSpan_clampExtrema * CurLinearIndex + DataOffset_clampExtrema], Min, Max);
+}
+
+
+StructuredBuffer<float> vSrcScalarFieldData_CCSFieldGradient;
+RWStructuredBuffer<float> voGradientFieldDataX_CCSFieldGradient;
+RWStructuredBuffer<float> voGradientFieldDataY_CCSFieldGradient;
+RWStructuredBuffer<float> voGradientFieldDataZ_CCSFieldGradient;
+[numthreads(NUMTHREADS, 1, 1)]
+void CCSFieldGradient(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    float Left = vSrcScalarFieldData_CCSFieldGradient[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0))];
+    float Right = vSrcScalarFieldData_CCSFieldGradient[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0))];
+    float Down = vSrcScalarFieldData_CCSFieldGradient[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0))];
+    float Up = vSrcScalarFieldData_CCSFieldGradient[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0))];
+    float Back = vSrcScalarFieldData_CCSFieldGradient[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1))];
+    float Front = vSrcScalarFieldData_CCSFieldGradient[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1))];
+
+    voGradientFieldDataX_CCSFieldGradient[CurLinearIndex] = 0.5 * (Right - Left) / GridSpacing.x;
+    voGradientFieldDataY_CCSFieldGradient[CurLinearIndex] = 0.5 * (Up - Down) / GridSpacing.y;
+    voGradientFieldDataZ_CCSFieldGradient[CurLinearIndex] = 0.5 * (Front - Back) / GridSpacing.z;
+}
+
+StructuredBuffer<float> vSrcScalarFieldData_CCSFieldLaplacian;
+RWStructuredBuffer<float> voLaplacianFieldData_CCSFieldLaplacian;
+[numthreads(NUMTHREADS, 1, 1)]
+void CCSFieldLaplacian(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    float Center = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3( 0, 0, 0))];
+    float Left   = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0))];
+    float Right  = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3( 1, 0, 0))];
+    float Down   = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0))];
+    float Up     = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0,  1, 0))];
+    float Back   = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1))];
+    float Front  = vSrcScalarFieldData_CCSFieldLaplacian[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0,  1))];
+
+    voLaplacianFieldData_CCSFieldLaplacian[CurLinearIndex] =
+		(Right - 2 * Center + Left) / (GridSpacing.x * GridSpacing.x) +
+		(Up - 2 * Center + Down) / (GridSpacing.y * GridSpacing.y) +
+		(Front - 2 * Center + Back) / (GridSpacing.z * GridSpacing.z);
+}
+
+StructuredBuffer<float> vSrcVectorFieldDataX_CCVFieldDivergence;
+StructuredBuffer<float> vSrcVectorFieldDataY_CCVFieldDivergence;
+StructuredBuffer<float> vSrcVectorFieldDataZ_CCVFieldDivergence;
+RWStructuredBuffer<float> voDivergenceFieldData_CCVFieldDivergence;
+[numthreads(NUMTHREADS, 1, 1)]
+void CCVFieldDivergence(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    float Left = vSrcVectorFieldDataX_CCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0))];
+    float Right = vSrcVectorFieldDataX_CCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0))];
+    float Down = vSrcVectorFieldDataY_CCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0))];
+    float Up = vSrcVectorFieldDataY_CCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0))];
+    float Back = vSrcVectorFieldDataZ_CCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1))];
+    float Front = vSrcVectorFieldDataZ_CCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1))];
+
+    voDivergenceFieldData_CCVFieldDivergence[CurLinearIndex] = 0.5 * (Right - Left) / GridSpacing.x + 0.5 * (Up - Down) / GridSpacing.y + 0.5 * (Front - Back) / GridSpacing.z;
+}
+
+StructuredBuffer<float> vSrcVectorFieldDataX_FCVFieldDivergence;
+StructuredBuffer<float> vSrcVectorFieldDataY_FCVFieldDivergence;
+StructuredBuffer<float> vSrcVectorFieldDataZ_FCVFieldDivergence;
+RWStructuredBuffer<float> voDivergenceFieldData_FCVFieldDivergence;
+[numthreads(NUMTHREADS, 1, 1)]
+void FCVFieldDivergence(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+
+    float Left = vSrcVectorFieldDataX_FCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0))];
+    float Right = vSrcVectorFieldDataX_FCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0))];
+    float Down = vSrcVectorFieldDataY_FCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0))];
+    float Up = vSrcVectorFieldDataY_FCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0))];
+    float Back = vSrcVectorFieldDataZ_FCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0))];
+    float Front = vSrcVectorFieldDataZ_FCVFieldDivergence[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1))];
+
+    voDivergenceFieldData_FCVFieldDivergence[CurLinearIndex] = (Right - Left) / GridSpacing.x + (Up - Down) / GridSpacing.y + (Front - Back) / GridSpacing.z;
+}
+
+StructuredBuffer<float> vSrcVectorFieldDataX_CCVFieldCurl;
+StructuredBuffer<float> vSrcVectorFieldDataY_CCVFieldCurl;
+StructuredBuffer<float> vSrcVectorFieldDataZ_CCVFieldCurl;
+RWStructuredBuffer<float> voCurlFieldDataX_CCVFieldCurl;
+RWStructuredBuffer<float> voCurlFieldDataY_CCVFieldCurl;
+RWStructuredBuffer<float> voCurlFieldDataZ_CCVFieldCurl;
+[numthreads(NUMTHREADS, 1, 1)]
+void CCVFieldCurl(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float Fx_ym = vSrcVectorFieldDataX_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0))];
+    float Fx_yp = vSrcVectorFieldDataX_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0))];
+    float Fx_zm = vSrcVectorFieldDataX_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1))];
+    float Fx_zp = vSrcVectorFieldDataX_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1))];
+
+    float Fy_xm = vSrcVectorFieldDataY_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0))];
+    float Fy_xp = vSrcVectorFieldDataY_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0))];
+    float Fy_zm = vSrcVectorFieldDataY_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1))];
+    float Fy_zp = vSrcVectorFieldDataY_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1))];
+
+    float Fz_xm = vSrcVectorFieldDataZ_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0))];
+    float Fz_xp = vSrcVectorFieldDataZ_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0))];
+    float Fz_ym = vSrcVectorFieldDataZ_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0))];
+    float Fz_yp = vSrcVectorFieldDataZ_CCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0))];
+
+    voCurlFieldDataX_CCVFieldCurl[CurLinearIndex] = 0.5 * (Fz_yp - Fz_ym) / GridSpacing.y - 0.5 * (Fy_zp - Fy_zm) / GridSpacing.z;
+    voCurlFieldDataY_CCVFieldCurl[CurLinearIndex] = 0.5 * (Fx_zp - Fx_zm) / GridSpacing.z - 0.5 * (Fz_xp - Fz_xm) / GridSpacing.x;
+    voCurlFieldDataZ_CCVFieldCurl[CurLinearIndex] = 0.5 * (Fy_xp - Fy_xm) / GridSpacing.x - 0.5 * (Fx_yp - Fx_ym) / GridSpacing.y;
+}
+
+StructuredBuffer<float> vSrcVectorFieldDataX_FCVFieldCurl;
+StructuredBuffer<float> vSrcVectorFieldDataY_FCVFieldCurl;
+StructuredBuffer<float> vSrcVectorFieldDataZ_FCVFieldCurl;
+RWStructuredBuffer<float> voCurlFieldDataX_FCVFieldCurl;
+RWStructuredBuffer<float> voCurlFieldDataY_FCVFieldCurl;
+RWStructuredBuffer<float> voCurlFieldDataZ_FCVFieldCurl;
+[numthreads(NUMTHREADS, 1, 1)]
+void FCVFieldCurl(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+
+    float Fx_ym = 0.5 * (vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, -1, 0))] + vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, -1, 0))]);
+    float Fx_yp = 0.5 * (vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0,  1, 0))] + vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1,  1, 0))]);
+    float Fx_zm = 0.5 * (vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, -1))] + vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, -1))]);
+    float Fx_zp = 0.5 * (vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0,  1))] + vSrcVectorFieldDataX_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0,  1))]);
+
+    float Fy_xm = 0.5 * (vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(-1, 0, 0))] + vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(-1, 1, 0))]);
+    float Fy_xp = 0.5 * (vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3( 1, 0, 0))] + vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3( 1, 1, 0))]);
+    float Fy_zm = 0.5 * (vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, -1))] + vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, -1))]);
+    float Fy_zp = 0.5 * (vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0,  1))] + vSrcVectorFieldDataY_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1,  1))]);
+
+    float Fz_xm = 0.5 * (vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(-1, 0, 0))] + vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(-1, 0, 1))]);
+    float Fz_xp = 0.5 * (vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3( 1, 0, 0))] + vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3( 1, 0, 1))]);
+    float Fz_ym = 0.5 * (vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, -1, 0))] + vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, -1, 1))]);
+    float Fz_yp = 0.5 * (vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0,  1, 0))] + vSrcVectorFieldDataZ_FCVFieldCurl[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0,  1, 1))]);
+
+    voCurlFieldDataX_FCVFieldCurl[CurLinearIndex] = 0.5 * (Fz_yp - Fz_ym) / GridSpacing.y - 0.5 * (Fy_zp - Fy_zm) / GridSpacing.z;
+    voCurlFieldDataY_FCVFieldCurl[CurLinearIndex] = 0.5 * (Fx_zp - Fx_zm) / GridSpacing.z - 0.5 * (Fz_xp - Fz_xm) / GridSpacing.x;
+    voCurlFieldDataZ_FCVFieldCurl[CurLinearIndex] = 0.5 * (Fy_xp - Fy_xm) / GridSpacing.x - 0.5 * (Fx_yp - Fx_ym) / GridSpacing.y;
+}
+
+StructuredBuffer<float> vSrcVectorFieldDataX_CCVFieldLength;
+StructuredBuffer<float> vSrcVectorFieldDataY_CCVFieldLength;
+StructuredBuffer<float> vSrcVectorFieldDataZ_CCVFieldLength;
+RWStructuredBuffer<float> voLengthFieldData_CCVFieldLength;
+[numthreads(NUMTHREADS, 1, 1)]
+void CCVFieldLength(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    float3 CurCellValue = float3(vSrcVectorFieldDataX_CCVFieldLength[CurLinearIndex], vSrcVectorFieldDataY_CCVFieldLength[CurLinearIndex], vSrcVectorFieldDataZ_CCVFieldLength[CurLinearIndex]);
+
+    voLengthFieldData_CCVFieldLength[CurLinearIndex] = length(CurCellValue);
+}
+
+StructuredBuffer<float> vSrcVectorFieldDataX_FCVFieldLength;
+StructuredBuffer<float> vSrcVectorFieldDataY_FCVFieldLength;
+StructuredBuffer<float> vSrcVectorFieldDataZ_FCVFieldLength;
+RWStructuredBuffer<float> voLengthFieldData_FCVFieldLength;
+[numthreads(NUMTHREADS, 1, 1)]
+void FCVFieldLength(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+
+    float Left = vSrcVectorFieldDataX_FCVFieldLength[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0))];
+    float Right = vSrcVectorFieldDataX_FCVFieldLength[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0))];
+    float Down = vSrcVectorFieldDataY_FCVFieldLength[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0))];
+    float Up = vSrcVectorFieldDataY_FCVFieldLength[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0))];
+    float Back = vSrcVectorFieldDataZ_FCVFieldLength[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0))];
+    float Front = vSrcVectorFieldDataZ_FCVFieldLength[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1))];
+    
+    float3 CurCellValue = float3(0.5 * (Left + Right), 0.5 * (Down + Up), 0.5 * (Back + Front));
+
+    voLengthFieldData_FCVFieldLength[CurLinearIndex] = length(CurCellValue);
+}
+
+StructuredBuffer<float> vFCVFieldDataX_transferFCVField2CCVField;
+StructuredBuffer<float> vFCVFieldDataY_transferFCVField2CCVField;
+StructuredBuffer<float> vFCVFieldDataZ_transferFCVField2CCVField;
+RWStructuredBuffer<float> voCCVFieldDataX_transferFCVField2CCVField;
+RWStructuredBuffer<float> voCCVFieldDataY_transferFCVField2CCVField;
+RWStructuredBuffer<float> voCCVFieldDataZ_transferFCVField2CCVField;
+[numthreads(NUMTHREADS, 1, 1)]
+void transferFCVField2CCVField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+
+    float Left = vFCVFieldDataX_transferFCVField2CCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0))];
+    float Right = vFCVFieldDataX_transferFCVField2CCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0))];
+    float Down = vFCVFieldDataY_transferFCVField2CCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0))];
+    float Up = vFCVFieldDataY_transferFCVField2CCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0))];
+    float Back = vFCVFieldDataZ_transferFCVField2CCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0))];
+    float Front = vFCVFieldDataZ_transferFCVField2CCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1))];
+    
+    float3 CurCellValue = float3(0.5 * (Left + Right), 0.5 * (Down + Up), 0.5 * (Back + Front));
+
+    voCCVFieldDataX_transferFCVField2CCVField[CurLinearIndex] = CurCellValue.x;
+    voCCVFieldDataY_transferFCVField2CCVField[CurLinearIndex] = CurCellValue.y;
+    voCCVFieldDataZ_transferFCVField2CCVField[CurLinearIndex] = CurCellValue.z;
+}
+
+StructuredBuffer<float> vCCVFieldDataX_transferCCVField2FCVField;
+StructuredBuffer<float> vCCVFieldDataY_transferCCVField2FCVField;
+StructuredBuffer<float> vCCVFieldDataZ_transferCCVField2FCVField;
+RWStructuredBuffer<float> voFCVFieldDataX_transferCCVField2FCVField;
+RWStructuredBuffer<float> voFCVFieldDataY_transferCCVField2FCVField;
+RWStructuredBuffer<float> voFCVFieldDataZ_transferCCVField2FCVField;
+[numthreads(NUMTHREADS, 1, 1)]
+void transferCCVField2FCVField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+
+    float CenterX = vCCVFieldDataX_transferCCVField2FCVField[CurLinearIndex];
+    float CenterY = vCCVFieldDataY_transferCCVField2FCVField[CurLinearIndex];
+    float CenterZ = vCCVFieldDataZ_transferCCVField2FCVField[CurLinearIndex];
+    float Left = vCCVFieldDataX_transferCCVField2FCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution.x, int3(-1, 0, 0))];
+    float Down = vCCVFieldDataY_transferCCVField2FCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution.y, int3(0, -1, 0))];
+    float Back = vCCVFieldDataZ_transferCCVField2FCVField[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution.z, int3(0, 0, -1))];
+   
+    float CurFaceValueX = float(0.5 * (Left + CenterX));
+    float CurFaceValueY = float(0.5 * (Down + CenterY));
+    float CurFaceValueZ = float(0.5 * (Back + CenterZ));
+    
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0));
+    int WBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0));
+    
+    voFCVFieldDataX_transferCCVField2FCVField[ULeftLinearIndex] = CurFaceValueX;
+    voFCVFieldDataY_transferCCVField2FCVField[VDownLinearIndex] = CurFaceValueY;
+    voFCVFieldDataZ_transferCCVField2FCVField[WBackLinearIndex] = CurFaceValueZ;
+    if (CurCoordIndex.x == GridResolution.x - 1)
+    {
+        int URightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0));
+        voFCVFieldDataX_transferCCVField2FCVField[URightLinearIndex] = CenterX;
+    }
+    if (CurCoordIndex.y == GridResolution.y - 1)
+    {
+        int VUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0));
+        voFCVFieldDataY_transferCCVField2FCVField[VUpLinearIndex] = CenterY;
+    }
+    if (CurCoordIndex.z == GridResolution.z - 1)
+    {
+        int WFrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1));
+        voFCVFieldDataZ_transferCCVField2FCVField[WFrontLinearIndex] = CenterZ;
+    }
+}
+
+
+[numthreads(NUMTHREADS, 1, 1)]
+void unionSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    voDstSDFData[CurLinearIndex] = min(vSrcSDFData1[CurLinearIndex], vSrcSDFData2[CurLinearIndex]);
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void intersectSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    voDstSDFData[CurLinearIndex] = max(vSrcSDFData1[CurLinearIndex], vSrcSDFData2[CurLinearIndex]);
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void differenceSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    voDstSDFData[CurLinearIndex] = max(vSrcSDFData1[CurLinearIndex], -vSrcSDFData2[CurLinearIndex]);
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void setFCVDataWithBox(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurCellMin = GridOrigin + GridSpacing * CurCoordIndex;
+    float3 CurCellMax = CurCellMin + GridSpacing;
+    
+    if (CurCellMin.x < vBoxMax.x && CurCellMax.x > vBoxMin.x &&
+        CurCellMin.y < vBoxMax.y && CurCellMax.y > vBoxMin.y &&
+        CurCellMin.z < vBoxMax.z && CurCellMax.z > vBoxMin.z)
+    {
+        int3 ResolutionX = GridResolution + int3(1, 0, 0);
+        vioFieldDataX[transCoordIndex2LinearWithOffset(CurCoordIndex, ResolutionX, int3(0, 0, 0))] = vVectorValue.x;
+        vioFieldDataX[transCoordIndex2LinearWithOffset(CurCoordIndex, ResolutionX, int3(1, 0, 0))] = vVectorValue.x;
+    
+        int3 ResolutionY = GridResolution + int3(0, 1, 0);
+        vioFieldDataY[transCoordIndex2LinearWithOffset(CurCoordIndex, ResolutionY, int3(0, 0, 0))] = vVectorValue.y;
+        vioFieldDataY[transCoordIndex2LinearWithOffset(CurCoordIndex, ResolutionY, int3(0, 1, 0))] = vVectorValue.y;
+    
+        int3 ResolutionZ = GridResolution + int3(0, 0, 1);
+        vioFieldDataZ[transCoordIndex2LinearWithOffset(CurCoordIndex, ResolutionZ, int3(0, 0, 0))] = vVectorValue.z;
+        vioFieldDataZ[transCoordIndex2LinearWithOffset(CurCoordIndex, ResolutionZ, int3(0, 0, 1))] = vVectorValue.z;
+    }
+}

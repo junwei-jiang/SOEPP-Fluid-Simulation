@@ -1,0 +1,81 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel generateRhoAndMagField
+#pragma kernel generateInitVelFieldX
+#pragma kernel generateInitVelFieldY
+
+float R_generateRhoAndMagField;
+float CenterX_generateRhoAndMagField;
+float CenterY_generateRhoAndMagField;
+RWStructuredBuffer<float> voRhoField_generateRhoAndMagField;
+RWStructuredBuffer<float> voMagField_generateRhoAndMagField;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateRhoAndMagField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+
+    float PosX = GridOrigin.x + GridSpacing.x * (CurCoordIndex.x + 0.5f);
+    float PosY = GridOrigin.y + GridSpacing.y * (CurCoordIndex.y + 0.5f);
+    
+    float Circle = sqrt((PosX - CenterX_generateRhoAndMagField) * (PosX - CenterX_generateRhoAndMagField) + (PosY - CenterY_generateRhoAndMagField) * (PosY - CenterY_generateRhoAndMagField)) - R_generateRhoAndMagField;
+
+    voRhoField_generateRhoAndMagField[CenterLinearIndex] = Circle;
+    
+    PosX /= GridResolution.x * GridSpacing.x;
+    PosY /= GridResolution.y * GridSpacing.y;
+    
+    float TempX = -2.0f * sin(M_PI * PosX) * sin(M_PI * PosX) * sin(M_PI * PosY) * cos(M_PI * PosY);
+    float TempY =  2.0f * sin(M_PI * PosX) * cos(M_PI * PosX) * sin(M_PI * PosY) * sin(M_PI * PosY);
+    voMagField_generateRhoAndMagField[CenterLinearIndex] = sqrt(TempX * TempX + TempY * TempY);
+}
+
+float Normalize_generateInitVelFieldX;
+RWStructuredBuffer<float> voVelFieldX_generateInitVelFieldX;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateInitVelFieldX(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    float3 Pos = GridOrigin + GridSpacing * (CurCoordIndex + float3(0.0f, 0.5f, 0.0f));
+    
+    float PosX = Pos.x / ((GridResolution.x - 1) * GridSpacing.x);
+    float PosY = Pos.y / (GridResolution.y * GridSpacing.y);
+
+    voVelFieldX_generateInitVelFieldX[CenterLinearIndex] = -2.0f * sin(M_PI * PosX) * sin(M_PI * PosX) * sin(M_PI * PosY) * cos(M_PI * PosY) / Normalize_generateInitVelFieldX;
+}
+
+float Normalize_generateInitVelFieldY;
+RWStructuredBuffer<float> voVelFieldY_generateInitVelFieldY;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateInitVelFieldY(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    float3 Pos = GridOrigin + GridSpacing * (CurCoordIndex + float3(0.5f, 0.0f, 0.0f));
+    
+    float PosX = Pos.x / (GridResolution.x * GridSpacing.x);
+    float PosY = Pos.y / ((GridResolution.y - 1) * GridSpacing.y);
+
+    voVelFieldY_generateInitVelFieldY[CenterLinearIndex] = 2.0f * sin(M_PI * PosX) * cos(M_PI * PosX) * sin(M_PI * PosY) * sin(M_PI * PosY) / Normalize_generateInitVelFieldY;
+}

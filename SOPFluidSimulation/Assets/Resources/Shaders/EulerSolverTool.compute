@@ -1,0 +1,1227 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel applyBuoyancyA
+#pragma kernel applyBuoyancyB
+#pragma kernel diffuseFieldRed
+#pragma kernel diffuseFieldBlack
+#pragma kernel buildFluidMarkers
+#pragma kernel buildPressureMatrixA
+#pragma kernel buildPressureVectorb
+#pragma kernel applyPotentialGradient
+#pragma kernel applyPressureGradient
+#pragma kernel updatePressure
+#pragma kernel updatePressureGradient
+#pragma kernel correctPressureBoundaryCondition
+#pragma kernel correctVelBoundaryCondition
+#pragma kernel calculateKineticEnergyField
+#pragma kernel addFluid
+#pragma kernel removeFluid
+#pragma kernel setFluidVel
+#pragma kernel fdmMatrixVectorMul
+#pragma kernel buildExtrapolationMarkers
+#pragma kernel extrapolatingData
+#pragma kernel buildExtrapolationMarkersOutwards
+#pragma kernel buildMarkersAndExtrapolatingData
+#pragma kernel generateFluidDomainFromBBox
+#pragma kernel generateFluidDomainFromBoundingBoxs
+
+float3 vFluidDomainMin;
+float3 vFluidDomainMax;
+int vNumofBoundingBoxs;
+
+StructuredBuffer<int> vMarkersFieldData;
+RWStructuredBuffer<float> voFdmMatrixValue;
+
+StructuredBuffer<float> vFluidVelFieldDataX;
+StructuredBuffer<float> vFluidVelFieldDataY;
+StructuredBuffer<float> vFluidVelFieldDataZ;
+StructuredBuffer<float> vDivergenceFieldData;
+StructuredBuffer<float> vSolidVelFieldDataX;
+StructuredBuffer<float> vSolidVelFieldDataY;
+StructuredBuffer<float> vSolidVelFieldDataZ;
+RWStructuredBuffer<float> voVectorbValue;
+
+StructuredBuffer<float> vPressureFieldData;
+RWStructuredBuffer<float> vioFluidVelFieldDataX;
+RWStructuredBuffer<float> vioFluidVelFieldDataY;
+RWStructuredBuffer<float> vioFluidVelFieldDataZ;
+
+StructuredBuffer<float> vFdmMatrixValue;
+StructuredBuffer<float> vInputVectorValue;
+RWStructuredBuffer<float> voOutputVectorValue;
+
+StructuredBuffer<float> vScalarFieldData;
+RWStructuredBuffer<float> vioDisMarkersFieldData;
+
+StructuredBuffer<float> vDisMarkersFieldData;
+RWStructuredBuffer<float> vioScalarFieldData;
+
+StructuredBuffer<float> vBoundarysSDFFieldData;
+RWStructuredBuffer<float> voFluidDomainFieldData;
+
+StructuredBuffer<float3> vFluidBoundingBoxsMin;
+StructuredBuffer<float3> vFluidBoundingBoxsMax;
+
+float Alpha_applyBuoyancyA;
+float Beta_applyBuoyancyA;
+float DeltaT_applyBuoyancyA;
+StructuredBuffer<float> vDensityFieldData_applyBuoyancyA;
+StructuredBuffer<float> vTemperatureFieldData_applyBuoyancyA;
+RWStructuredBuffer<float> voFluidVelFieldDataY_applyBuoyancyA;
+[numthreads(NUMTHREADS, 1, 1)]
+void applyBuoyancyA(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0));
+    
+    float Density = vDensityFieldData_applyBuoyancyA[CenterLinearIndex];
+    float Temperature = vTemperatureFieldData_applyBuoyancyA[CenterLinearIndex];
+    float F = -DeltaT_applyBuoyancyA * Alpha_applyBuoyancyA * Density + DeltaT_applyBuoyancyA * Beta_applyBuoyancyA * Temperature;
+
+    voFluidVelFieldDataY_applyBuoyancyA[VDownLinearIndex] += 0.5f * F;
+}
+
+float Alpha_applyBuoyancyB;
+float Beta_applyBuoyancyB;
+float DeltaT_applyBuoyancyB;
+StructuredBuffer<float> vDensityFieldData_applyBuoyancyB;
+StructuredBuffer<float> vTemperatureFieldData_applyBuoyancyB;
+RWStructuredBuffer<float> voFluidVelFieldDataY_applyBuoyancyB;
+[numthreads(NUMTHREADS, 1, 1)]
+void applyBuoyancyB(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int VUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0));
+    
+    float Density = vDensityFieldData_applyBuoyancyB[CenterLinearIndex];
+    float Temperature = vTemperatureFieldData_applyBuoyancyB[CenterLinearIndex];
+    float F = -DeltaT_applyBuoyancyB * Alpha_applyBuoyancyB * Density + DeltaT_applyBuoyancyB * Beta_applyBuoyancyB * Temperature;
+
+    if (CurCoordIndex.y > 0)
+    {
+        voFluidVelFieldDataY_applyBuoyancyB[VUpLinearIndex] += 0.5f * F;
+    }
+}
+
+float DiffuseCoefficient_diffuseFieldRed;
+StructuredBuffer<float> vOriginalFieldData_diffuseFieldRed;
+RWStructuredBuffer<float> voDiffusedFieldData_diffuseFieldRed;
+[numthreads(NUMTHREADS, 1, 1)]
+void diffuseFieldRed(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+   
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+    
+    if ((CurCoordIndex.x + CurCoordIndex.y + CurCoordIndex.z) % 2 == 0)
+    {
+        voDiffusedFieldData_diffuseFieldRed[CenterLinearIndex] = vOriginalFieldData_diffuseFieldRed[CenterLinearIndex]
+        + DiffuseCoefficient_diffuseFieldRed * (
+        + voDiffusedFieldData_diffuseFieldRed[LeftLinearIndex] + voDiffusedFieldData_diffuseFieldRed[RightLinearIndex]
+        + voDiffusedFieldData_diffuseFieldRed[DownLinearIndex] + voDiffusedFieldData_diffuseFieldRed[UpLinearIndex]
+        + voDiffusedFieldData_diffuseFieldRed[BackLinearIndex] + voDiffusedFieldData_diffuseFieldRed[FrontLinearIndex]);
+        
+        voDiffusedFieldData_diffuseFieldRed[CenterLinearIndex] /= (1.0f + 6.0f * DiffuseCoefficient_diffuseFieldRed);
+    }
+}
+
+float DiffuseCoefficient_diffuseFieldBlack;
+StructuredBuffer<float> vOriginalFieldData_diffuseFieldBlack;
+RWStructuredBuffer<float> voDiffusedFieldData_diffuseFieldBlack;
+[numthreads(NUMTHREADS, 1, 1)]
+void diffuseFieldBlack(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+   
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+    
+    if ((CurCoordIndex.x + CurCoordIndex.y + CurCoordIndex.z) % 2 == 1)
+    {
+        voDiffusedFieldData_diffuseFieldBlack[CenterLinearIndex] = vOriginalFieldData_diffuseFieldBlack[CenterLinearIndex]
+        + DiffuseCoefficient_diffuseFieldBlack * (
+        + voDiffusedFieldData_diffuseFieldBlack[LeftLinearIndex] + voDiffusedFieldData_diffuseFieldBlack[RightLinearIndex]
+        + voDiffusedFieldData_diffuseFieldBlack[DownLinearIndex] + voDiffusedFieldData_diffuseFieldBlack[UpLinearIndex]
+        + voDiffusedFieldData_diffuseFieldBlack[BackLinearIndex] + voDiffusedFieldData_diffuseFieldBlack[FrontLinearIndex]);
+        
+        voDiffusedFieldData_diffuseFieldBlack[CenterLinearIndex] /= (1.0f + 6.0f * DiffuseCoefficient_diffuseFieldBlack);
+    }
+}
+
+StructuredBuffer<float> vSolidSDFData_buildFluidMarkers;
+StructuredBuffer<float> vFluidSDFData_buildFluidMarkers;
+RWStructuredBuffer<int> voMarkersFieldData_buildFluidMarkers;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidMarkers(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    if (isInsideSDF(vSolidSDFData_buildFluidMarkers[CurLinearIndex]))//Solid
+    {
+        voMarkersFieldData_buildFluidMarkers[CurLinearIndex] = 2;
+    }
+    else if (isInsideSDF(vFluidSDFData_buildFluidMarkers[CurLinearIndex]))//Fluid
+    {
+        voMarkersFieldData_buildFluidMarkers[CurLinearIndex] = 1;
+    }
+    else //Air
+    {
+        voMarkersFieldData_buildFluidMarkers[CurLinearIndex] = 0;
+    }
+}
+
+uniform float3 Scale_buildPressureMatrixA;
+StructuredBuffer<int> vMarkersFieldData_buildPressureMatrixA;
+RWStructuredBuffer<float> voFdmMatrixData_buildPressureMatrixA;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildPressureMatrixA(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] = 0; //Center
+    voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex + 1] = 0; //Right
+    voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex + 2] = 0; //Up
+    voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex + 3] = 0; //Front
+
+    if (vMarkersFieldData_buildPressureMatrixA[CenterLinearIndex] == 1)//Fluid
+    {
+        if (CurCoordIndex.x > 0 && vMarkersFieldData_buildPressureMatrixA[LeftLinearIndex] != 2)
+        {
+            voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] += Scale_buildPressureMatrixA.x;
+        }
+        if (CurCoordIndex.x + 1 < GridResolution.x && vMarkersFieldData_buildPressureMatrixA[RightLinearIndex] != 2)
+        {
+            voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] += Scale_buildPressureMatrixA.x;
+            if (vMarkersFieldData_buildPressureMatrixA[RightLinearIndex] == 1)
+            {
+                voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex + 1] -= Scale_buildPressureMatrixA.x;
+            }
+        }
+        if (CurCoordIndex.y > 0 && vMarkersFieldData_buildPressureMatrixA[DownLinearIndex] != 2)
+        {
+            voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] += Scale_buildPressureMatrixA.y;
+        }
+        if (CurCoordIndex.y + 1 < GridResolution.y && vMarkersFieldData_buildPressureMatrixA[UpLinearIndex] != 2)
+        {
+            voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] += Scale_buildPressureMatrixA.y;
+            if (vMarkersFieldData_buildPressureMatrixA[UpLinearIndex] == 1)
+            {
+                voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex + 2] -= Scale_buildPressureMatrixA.y;
+            }
+        }
+        if (CurCoordIndex.z > 0 && vMarkersFieldData_buildPressureMatrixA[BackLinearIndex] != 2)
+        {
+            voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] += Scale_buildPressureMatrixA.z;
+        }
+        if (CurCoordIndex.z + 1 < GridResolution.z && vMarkersFieldData_buildPressureMatrixA[FrontLinearIndex] != 2)
+        {
+            voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] += Scale_buildPressureMatrixA.z;
+            if (vMarkersFieldData_buildPressureMatrixA[FrontLinearIndex] == 1)
+            {
+                voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex + 3] -= Scale_buildPressureMatrixA.z;
+            }
+        }
+    }
+    else //Solid & Air
+    {
+        voFdmMatrixData_buildPressureMatrixA[4 * CenterLinearIndex] = 1.0;
+    }
+}
+
+uniform float3 Scale_buildPressureVectorb;
+RWStructuredBuffer<float> voVectorbValue_buildPressureVectorb;
+StructuredBuffer<int> vMarkersFieldData_buildPressureVectorb;
+StructuredBuffer<float> vDivergenceFieldData_buildPressureVectorb;
+StructuredBuffer<float> vFluidVelFieldDataX_buildPressureVectorb;
+StructuredBuffer<float> vFluidVelFieldDataY_buildPressureVectorb;
+StructuredBuffer<float> vFluidVelFieldDataZ_buildPressureVectorb;
+StructuredBuffer<float> vSolidVelFieldDataX_buildPressureVectorb;
+StructuredBuffer<float> vSolidVelFieldDataY_buildPressureVectorb;
+StructuredBuffer<float> vSolidVelFieldDataZ_buildPressureVectorb;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildPressureVectorb(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0));
+    int URightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0));
+    int VUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0));
+    int WBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0));
+    int WFrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1));
+
+    if (vMarkersFieldData_buildPressureVectorb[CenterLinearIndex] == 1)
+    {
+        voVectorbValue_buildPressureVectorb[CenterLinearIndex] = -vDivergenceFieldData_buildPressureVectorb[CenterLinearIndex];
+        if (vMarkersFieldData_buildPressureVectorb[LeftLinearIndex] == 2)
+        {
+            voVectorbValue_buildPressureVectorb[CenterLinearIndex] -= Scale_buildPressureVectorb.x * (vFluidVelFieldDataX_buildPressureVectorb[ULeftLinearIndex] - vSolidVelFieldDataX_buildPressureVectorb[ULeftLinearIndex]);
+        }
+        if (vMarkersFieldData_buildPressureVectorb[RightLinearIndex] == 2)
+        {
+            voVectorbValue_buildPressureVectorb[CenterLinearIndex] += Scale_buildPressureVectorb.x * (vFluidVelFieldDataX_buildPressureVectorb[URightLinearIndex] - vSolidVelFieldDataX_buildPressureVectorb[URightLinearIndex]);
+        }
+        if (vMarkersFieldData_buildPressureVectorb[DownLinearIndex] == 2)
+        {
+            voVectorbValue_buildPressureVectorb[CenterLinearIndex] -= Scale_buildPressureVectorb.y * (vFluidVelFieldDataY_buildPressureVectorb[VDownLinearIndex] - vSolidVelFieldDataY_buildPressureVectorb[VDownLinearIndex]);
+        }
+        if (vMarkersFieldData_buildPressureVectorb[UpLinearIndex] == 2)
+        {
+            voVectorbValue_buildPressureVectorb[CenterLinearIndex] += Scale_buildPressureVectorb.y * (vFluidVelFieldDataY_buildPressureVectorb[VUpLinearIndex] - vSolidVelFieldDataY_buildPressureVectorb[VUpLinearIndex]);
+        }
+        if (vMarkersFieldData_buildPressureVectorb[BackLinearIndex] == 2)
+        {
+            voVectorbValue_buildPressureVectorb[CenterLinearIndex] -= Scale_buildPressureVectorb.z * (vFluidVelFieldDataZ_buildPressureVectorb[WBackLinearIndex] - vSolidVelFieldDataZ_buildPressureVectorb[WBackLinearIndex]);
+        }
+        if (vMarkersFieldData_buildPressureVectorb[FrontLinearIndex] == 2)
+        {
+            voVectorbValue_buildPressureVectorb[CenterLinearIndex] += Scale_buildPressureVectorb.z * (vFluidVelFieldDataZ_buildPressureVectorb[WFrontLinearIndex] - vSolidVelFieldDataZ_buildPressureVectorb[WFrontLinearIndex]);
+        }
+    }
+    else
+    {
+        voVectorbValue_buildPressureVectorb[CenterLinearIndex] = 0.0;
+    }
+}
+
+StructuredBuffer<float> vFdmMatrixValue_fdmMatrixVectorMul;
+StructuredBuffer<float> vInputVectorValue_fdmMatrixVectorMul;
+RWStructuredBuffer<float> voOutputVectorValue_fdmMatrixVectorMul;
+[numthreads(NUMTHREADS, 1, 1)]
+void fdmMatrixVectorMul(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    voOutputVectorValue_fdmMatrixVectorMul[CenterLinearIndex] =
+		vFdmMatrixValue_fdmMatrixVectorMul[4 * CenterLinearIndex] * vInputVectorValue_fdmMatrixVectorMul[CenterLinearIndex] +
+		((CurCoordIndex.x > 0) ? vFdmMatrixValue_fdmMatrixVectorMul[4 * LeftLinearIndex + 1] * vInputVectorValue_fdmMatrixVectorMul[LeftLinearIndex] : 0.0) +
+		((CurCoordIndex.x + 1 < GridResolution.x) ? vFdmMatrixValue_fdmMatrixVectorMul[4 * CenterLinearIndex + 1] * vInputVectorValue_fdmMatrixVectorMul[RightLinearIndex] : 0.0) +
+		((CurCoordIndex.y > 0) ? vFdmMatrixValue_fdmMatrixVectorMul[4 * DownLinearIndex + 2] * vInputVectorValue_fdmMatrixVectorMul[DownLinearIndex] : 0.0) +
+		((CurCoordIndex.y + 1 < GridResolution.y) ? vFdmMatrixValue_fdmMatrixVectorMul[4 * CenterLinearIndex + 2] * vInputVectorValue_fdmMatrixVectorMul[UpLinearIndex] : 0.0) +
+		((CurCoordIndex.z > 0) ? vFdmMatrixValue_fdmMatrixVectorMul[4 * BackLinearIndex + 3] * vInputVectorValue_fdmMatrixVectorMul[BackLinearIndex] : 0.0) +
+		((CurCoordIndex.z + 1 < GridResolution.z) ? vFdmMatrixValue_fdmMatrixVectorMul[4 * CenterLinearIndex + 3] * vInputVectorValue_fdmMatrixVectorMul[FrontLinearIndex] : 0.0);
+}
+
+uniform float3 Scale_applyPotentialGradient;
+StructuredBuffer<int> vMarkersFieldData_applyPotentialGradient;
+RWStructuredBuffer<float> vioFluidVelFieldDataX_applyPotentialGradient;
+RWStructuredBuffer<float> vioFluidVelFieldDataY_applyPotentialGradient;
+RWStructuredBuffer<float> vioFluidVelFieldDataZ_applyPotentialGradient;
+StructuredBuffer<float> vSolidVelFieldDataX_applyPotentialGradient;
+StructuredBuffer<float> vSolidVelFieldDataY_applyPotentialGradient;
+StructuredBuffer<float> vSolidVelFieldDataZ_applyPotentialGradient;
+StructuredBuffer<float> vPotentialFieldData_applyPotentialGradient;
+[numthreads(NUMTHREADS, 1, 1)]
+void applyPotentialGradient(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0));
+    int WBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0));
+
+    if (vMarkersFieldData_applyPotentialGradient[LeftLinearIndex] == 1 || vMarkersFieldData_applyPotentialGradient[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_applyPotentialGradient[LeftLinearIndex] == 2 || vMarkersFieldData_applyPotentialGradient[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataX_applyPotentialGradient[ULeftLinearIndex] = vSolidVelFieldDataX_applyPotentialGradient[ULeftLinearIndex];
+        }
+        else
+        {
+            vioFluidVelFieldDataX_applyPotentialGradient[ULeftLinearIndex] -= Scale_applyPotentialGradient.x * (vPotentialFieldData_applyPotentialGradient[CenterLinearIndex] - vPotentialFieldData_applyPotentialGradient[LeftLinearIndex]);
+        }
+    }
+    else
+    {
+        vioFluidVelFieldDataX_applyPotentialGradient[ULeftLinearIndex] = UNKNOWN;
+    }
+
+    if (vMarkersFieldData_applyPotentialGradient[DownLinearIndex] == 1 || vMarkersFieldData_applyPotentialGradient[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_applyPotentialGradient[DownLinearIndex] == 2 || vMarkersFieldData_applyPotentialGradient[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataY_applyPotentialGradient[VDownLinearIndex] = vSolidVelFieldDataY_applyPotentialGradient[VDownLinearIndex];
+        }
+        else
+        {
+            vioFluidVelFieldDataY_applyPotentialGradient[VDownLinearIndex] -= Scale_applyPotentialGradient.y * (vPotentialFieldData_applyPotentialGradient[CenterLinearIndex] - vPotentialFieldData_applyPotentialGradient[DownLinearIndex]);
+        }
+    }
+    else
+    {
+        vioFluidVelFieldDataY_applyPotentialGradient[VDownLinearIndex] = UNKNOWN;
+    }
+
+    if (vMarkersFieldData_applyPotentialGradient[BackLinearIndex] == 1 || vMarkersFieldData_applyPotentialGradient[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_applyPotentialGradient[BackLinearIndex] == 2 || vMarkersFieldData_applyPotentialGradient[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataZ_applyPotentialGradient[WBackLinearIndex] = vSolidVelFieldDataZ_applyPotentialGradient[WBackLinearIndex];
+        }
+        else
+        {
+            vioFluidVelFieldDataZ_applyPotentialGradient[WBackLinearIndex] -= Scale_applyPotentialGradient.z * (vPotentialFieldData_applyPotentialGradient[CenterLinearIndex] - vPotentialFieldData_applyPotentialGradient[BackLinearIndex]);
+        }
+    }
+    else
+    {
+        vioFluidVelFieldDataZ_applyPotentialGradient[WBackLinearIndex] = UNKNOWN;
+    }
+
+    if (CurCoordIndex.x == GridResolution.x - 1)
+    {
+        int URightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0));
+        vioFluidVelFieldDataX_applyPotentialGradient[URightLinearIndex] = UNKNOWN;
+    }
+    if (CurCoordIndex.y == GridResolution.y - 1)
+    {
+        int VUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0));
+        vioFluidVelFieldDataY_applyPotentialGradient[VUpLinearIndex] = UNKNOWN;
+    }
+    if (CurCoordIndex.z == GridResolution.z - 1)
+    {
+        int WFrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1));
+        vioFluidVelFieldDataZ_applyPotentialGradient[WFrontLinearIndex] = UNKNOWN;
+    }
+}
+
+uniform float3 Scale_applyPressureGradient;
+StructuredBuffer<int> vMarkersFieldData_applyPressureGradient;
+RWStructuredBuffer<float> vioFluidVelFieldDataX_applyPressureGradient;
+RWStructuredBuffer<float> vioFluidVelFieldDataY_applyPressureGradient;
+RWStructuredBuffer<float> vioFluidVelFieldDataZ_applyPressureGradient;
+StructuredBuffer<float> vSolidVelFieldDataX_applyPressureGradient;
+StructuredBuffer<float> vSolidVelFieldDataY_applyPressureGradient;
+StructuredBuffer<float> vSolidVelFieldDataZ_applyPressureGradient;
+StructuredBuffer<float> vPressureGradientFieldDataX_applyPressureGradient;
+StructuredBuffer<float> vPressureGradientFieldDataY_applyPressureGradient;
+StructuredBuffer<float> vPressureGradientFieldDataZ_applyPressureGradient;
+[numthreads(NUMTHREADS, 1, 1)]
+void applyPressureGradient(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0));
+    int WBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0));
+
+    if (vMarkersFieldData_applyPressureGradient[LeftLinearIndex] == 1 || vMarkersFieldData_applyPressureGradient[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_applyPressureGradient[LeftLinearIndex] == 2 || vMarkersFieldData_applyPressureGradient[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataX_applyPressureGradient[ULeftLinearIndex] = vSolidVelFieldDataX_applyPressureGradient[ULeftLinearIndex];
+        }
+        else
+        {
+            vioFluidVelFieldDataX_applyPressureGradient[ULeftLinearIndex] -= Scale_applyPressureGradient.x * vPressureGradientFieldDataX_applyPressureGradient[ULeftLinearIndex];
+        }
+    }
+
+    if (vMarkersFieldData_applyPressureGradient[DownLinearIndex] == 1 || vMarkersFieldData_applyPressureGradient[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_applyPressureGradient[DownLinearIndex] == 2 || vMarkersFieldData_applyPressureGradient[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataY_applyPressureGradient[VDownLinearIndex] = vSolidVelFieldDataY_applyPressureGradient[VDownLinearIndex];
+        }
+        else
+        {
+            vioFluidVelFieldDataY_applyPressureGradient[VDownLinearIndex] -= Scale_applyPressureGradient.y * vPressureGradientFieldDataY_applyPressureGradient[VDownLinearIndex];
+        }
+    }
+
+    if (vMarkersFieldData_applyPressureGradient[BackLinearIndex] == 1 || vMarkersFieldData_applyPressureGradient[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_applyPressureGradient[BackLinearIndex] == 2 || vMarkersFieldData_applyPressureGradient[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataZ_applyPressureGradient[WBackLinearIndex] = vSolidVelFieldDataZ_applyPressureGradient[WBackLinearIndex];
+        }
+        else
+        {
+            vioFluidVelFieldDataZ_applyPressureGradient[WBackLinearIndex] -= Scale_applyPressureGradient.z * vPressureGradientFieldDataZ_applyPressureGradient[WBackLinearIndex];
+        }
+    }
+}
+
+StructuredBuffer<int> vMarkersFieldData_updatePressure;
+StructuredBuffer<float> vPotentialFieldData_updatePressure;
+StructuredBuffer<float> vPressurFieldDataBackup_updatePressure;
+RWStructuredBuffer<float> voPressurFieldData_updatePressure;
+[numthreads(NUMTHREADS, 1, 1)]
+void updatePressure(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    if (vMarkersFieldData_updatePressure[CenterLinearIndex] == 1)
+    {
+        voPressurFieldData_updatePressure[CenterLinearIndex] += vPotentialFieldData_updatePressure[CenterLinearIndex];
+    }
+    //else
+    //{
+    //    voPressurFieldData_updatePressure[CenterLinearIndex] = UNKNOWN;
+    //}
+    else if (vMarkersFieldData_updatePressure[CenterLinearIndex] == 0)
+    {
+        voPressurFieldData_updatePressure[CenterLinearIndex] = 0;
+    }
+}
+
+StructuredBuffer<int> vMarkersFieldData_updatePressureGradient;
+StructuredBuffer<float> vTempPressurGradientFieldDataX_updatePressureGradient;
+StructuredBuffer<float> vTempPressurGradientFieldDataY_updatePressureGradient;
+StructuredBuffer<float> vTempPressurGradientFieldDataZ_updatePressureGradient;
+RWStructuredBuffer<float> voPressurGradientFieldDataX_updatePressureGradient;
+RWStructuredBuffer<float> voPressurGradientFieldDataY_updatePressureGradient;
+RWStructuredBuffer<float> voPressurGradientFieldDataZ_updatePressureGradient;
+[numthreads(NUMTHREADS, 1, 1)]
+void updatePressureGradient(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+    
+    if (vMarkersFieldData_updatePressureGradient[CenterLinearIndex] == 1)
+    {
+        //if (vMarkersFieldData_updatePressureGradient[LeftLinearIndex] == 2 || vMarkersFieldData_updatePressureGradient[RightLinearIndex] == 2 ||
+        //    vMarkersFieldData_updatePressureGradient[DownLinearIndex] == 2 || vMarkersFieldData_updatePressureGradient[UpLinearIndex] == 2 ||
+        //    vMarkersFieldData_updatePressureGradient[BackLinearIndex] == 2 || vMarkersFieldData_updatePressureGradient[FrontLinearIndex] == 2)
+        //{
+        //    voPressurGradientFieldDataX_updatePressureGradient[CenterLinearIndex] = 0;
+        //    voPressurGradientFieldDataY_updatePressureGradient[CenterLinearIndex] = 0;
+        //    voPressurGradientFieldDataZ_updatePressureGradient[CenterLinearIndex] = 0;
+        //}
+        //else
+        //{
+            voPressurGradientFieldDataX_updatePressureGradient[CenterLinearIndex] += vTempPressurGradientFieldDataX_updatePressureGradient[CenterLinearIndex];
+            voPressurGradientFieldDataY_updatePressureGradient[CenterLinearIndex] += vTempPressurGradientFieldDataY_updatePressureGradient[CenterLinearIndex];
+            voPressurGradientFieldDataZ_updatePressureGradient[CenterLinearIndex] += vTempPressurGradientFieldDataZ_updatePressureGradient[CenterLinearIndex];
+        //}
+    }
+    else
+    {
+        voPressurGradientFieldDataX_updatePressureGradient[CenterLinearIndex] = 0;
+        voPressurGradientFieldDataY_updatePressureGradient[CenterLinearIndex] = 0;
+        voPressurGradientFieldDataZ_updatePressureGradient[CenterLinearIndex] = 0;
+    }
+}
+
+int RBMarker_correctPressureBoundaryCondition;
+StructuredBuffer<int> vMarkersFieldData_correctPressureBoundaryCondition;
+RWStructuredBuffer<float> vioFluidPressureFieldData_correctPressureBoundaryCondition;
+[numthreads(NUMTHREADS, 1, 1)]
+void correctPressureBoundaryCondition(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    if ((CurCoordIndex.x + CurCoordIndex.y + CurCoordIndex.z) % 2 == RBMarker_correctPressureBoundaryCondition)//
+    {
+        int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+        int CenterRightNeighborLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+        int CenterLeftNeighborLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+        int CenterUpNeighborLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+        int CenterDownNeighborLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+        int CenterFrontNeighborLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+        int CenterBackNeighborLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+        float CurCoordPressure = 0.0f;
+        float Num = 0.0f;
+
+        if (vMarkersFieldData_correctPressureBoundaryCondition[CenterLinearIndex] == 2)
+        {
+            if (vMarkersFieldData_correctPressureBoundaryCondition[CenterRightNeighborLinearIndex] == 1)
+            {
+                CurCoordPressure += vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterRightNeighborLinearIndex];
+                Num += 1.0f;
+            }
+            if (vMarkersFieldData_correctPressureBoundaryCondition[CenterLeftNeighborLinearIndex] == 1)
+            {
+                CurCoordPressure += vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLeftNeighborLinearIndex];
+                Num += 1.0f;
+            }
+            if (vMarkersFieldData_correctPressureBoundaryCondition[CenterUpNeighborLinearIndex] == 1)
+            {
+                CurCoordPressure += vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterUpNeighborLinearIndex];
+                Num += 1.0f;
+            }
+            if (vMarkersFieldData_correctPressureBoundaryCondition[CenterDownNeighborLinearIndex] == 1)
+            {
+                CurCoordPressure += vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterDownNeighborLinearIndex];
+                Num += 1.0f;
+            }
+            if (vMarkersFieldData_correctPressureBoundaryCondition[CenterFrontNeighborLinearIndex] == 1)
+            {
+                CurCoordPressure += vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterFrontNeighborLinearIndex];
+                Num += 1.0f;
+            }
+            if (vMarkersFieldData_correctPressureBoundaryCondition[CenterBackNeighborLinearIndex] == 1)
+            {
+                CurCoordPressure += vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterBackNeighborLinearIndex];
+                Num += 1.0f;
+            }
+            if (Num)
+            {
+                CurCoordPressure = CurCoordPressure / Num;
+            }
+            vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = CurCoordPressure;
+            
+            //if (vMarkersFieldData_correctPressureBoundaryCondition[CenterRightNeighborLinearIndex] == 1)
+            //{
+            //    vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterRightNeighborLinearIndex];
+            //}
+            //if (vMarkersFieldData_correctPressureBoundaryCondition[CenterLeftNeighborLinearIndex] == 1)
+            //{
+            //    vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLeftNeighborLinearIndex];
+            //}
+            //if (vMarkersFieldData_correctPressureBoundaryCondition[CenterUpNeighborLinearIndex] == 1)
+            //{
+            //    vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterUpNeighborLinearIndex];
+            //}
+            //if (vMarkersFieldData_correctPressureBoundaryCondition[CenterDownNeighborLinearIndex] == 1)
+            //{
+            //    vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterDownNeighborLinearIndex];
+            //}
+            //if (vMarkersFieldData_correctPressureBoundaryCondition[CenterFrontNeighborLinearIndex] == 1)
+            //{
+            //    vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterFrontNeighborLinearIndex];
+            //}
+            //if (vMarkersFieldData_correctPressureBoundaryCondition[CenterBackNeighborLinearIndex] == 1)
+            //{
+            //    vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterLinearIndex] = vioFluidPressureFieldData_correctPressureBoundaryCondition[CenterBackNeighborLinearIndex];
+            //}
+        }
+    }
+}
+
+
+StructuredBuffer<int> vMarkersFieldData_calculateKineticEnergyField;
+float3 vXYZMax_calculateKineticEnergyField;
+float3 vXYZMin_calculateKineticEnergyField;
+StructuredBuffer<float> vFluidVelFieldDataX_calculateKineticEnergyField;
+StructuredBuffer<float> vFluidVelFieldDataY_calculateKineticEnergyField;
+StructuredBuffer<float> vFluidVelFieldDataZ_calculateKineticEnergyField;
+RWStructuredBuffer<float> voFluidKineticEnergyField_calculateKineticEnergyField;
+[numthreads(NUMTHREADS, 1, 1)]
+void calculateKineticEnergyField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    if (vMarkersFieldData_calculateKineticEnergyField[CurLinearIndex] == 1)
+    {
+        float3 Pos = float3(GridOrigin.x + GridSpacing.x * (CurCoordIndex.x + 0.5f), GridOrigin.y + GridSpacing.y * (CurCoordIndex.y + 0.5f), GridOrigin.z + GridSpacing.z * (CurCoordIndex.z + 0.5f));
+        float X_Min = vXYZMin_calculateKineticEnergyField[0];
+        float X_Max = vXYZMax_calculateKineticEnergyField[0];
+        float Y_Min = vXYZMin_calculateKineticEnergyField[1];
+        float Y_Max = vXYZMax_calculateKineticEnergyField[1];
+        float Z_Min = vXYZMin_calculateKineticEnergyField[2];
+        float Z_Max = vXYZMax_calculateKineticEnergyField[2];
+        if ((Pos.x >= X_Min && Pos.x <= X_Max) && (Pos.y >= Y_Min && Pos.y <= Y_Max) && (Pos.z >= Z_Min && Pos.z <= Z_Max))
+        {
+            voFluidKineticEnergyField_calculateKineticEnergyField[CurLinearIndex] = 0.5f *
+            (vFluidVelFieldDataX_calculateKineticEnergyField[CurLinearIndex] * vFluidVelFieldDataX_calculateKineticEnergyField[CurLinearIndex]
+            + vFluidVelFieldDataY_calculateKineticEnergyField[CurLinearIndex] * vFluidVelFieldDataY_calculateKineticEnergyField[CurLinearIndex]
+            + vFluidVelFieldDataZ_calculateKineticEnergyField[CurLinearIndex] * vFluidVelFieldDataZ_calculateKineticEnergyField[CurLinearIndex]);
+        }
+        else
+        {
+            voFluidKineticEnergyField_calculateKineticEnergyField[CurLinearIndex] = 0.0f;
+        }
+    }
+    else
+    {
+        voFluidKineticEnergyField_calculateKineticEnergyField[CurLinearIndex] = 0.0f;
+    }
+}
+
+//[numthreads(NUMTHREADS, 1, 1)]
+//void calculateTotalKineticEnergyField(uint3 id : SV_DispatchThreadID)
+//{
+    
+//}
+
+StructuredBuffer<int> vMarkersFieldData_correctVelBoundaryCondition;
+RWStructuredBuffer<float> vioFluidVelFieldDataX_correctVelBoundaryCondition;
+RWStructuredBuffer<float> vioFluidVelFieldDataY_correctVelBoundaryCondition;
+RWStructuredBuffer<float> vioFluidVelFieldDataZ_correctVelBoundaryCondition;
+StructuredBuffer<float> vSolidVelFieldDataX_correctVelBoundaryConditiont;
+StructuredBuffer<float> vSolidVelFieldDataY_correctVelBoundaryCondition;
+StructuredBuffer<float> vSolidVelFieldDataZ_correctVelBoundaryCondition;
+[numthreads(NUMTHREADS, 1, 1)]
+void correctVelBoundaryCondition(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 0, 0));
+    int WBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 0));
+
+    if (vMarkersFieldData_correctVelBoundaryCondition[LeftLinearIndex] == 1 || vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_correctVelBoundaryCondition[LeftLinearIndex] == 2 || vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataX_correctVelBoundaryCondition[ULeftLinearIndex] = vSolidVelFieldDataX_correctVelBoundaryConditiont[ULeftLinearIndex];
+        }
+    }
+    
+    if (vMarkersFieldData_correctVelBoundaryCondition[DownLinearIndex] == 1 || vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_correctVelBoundaryCondition[DownLinearIndex] == 2 || vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataY_correctVelBoundaryCondition[VDownLinearIndex] = vSolidVelFieldDataY_correctVelBoundaryCondition[VDownLinearIndex];
+        }
+    }
+
+    if (vMarkersFieldData_correctVelBoundaryCondition[BackLinearIndex] == 1 || vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 1)
+    {
+        if (vMarkersFieldData_correctVelBoundaryCondition[BackLinearIndex] == 2 || vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 2)
+        {
+            vioFluidVelFieldDataZ_correctVelBoundaryCondition[WBackLinearIndex] = vSolidVelFieldDataZ_correctVelBoundaryCondition[WBackLinearIndex];
+        }
+    }
+    
+    //if (CurCoordIndex.x == GridResolution.x - 1)
+    //{
+    //    int URightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(1, 0, 0));
+    //    if (vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 2)
+    //    {
+    //        vioFluidVelFieldDataX_correctVelBoundaryCondition[URightLinearIndex] = vSolidVelFieldDataX_correctVelBoundaryConditiont[URightLinearIndex];
+    //    }
+    //}
+    //if (CurCoordIndex.y == GridResolution.y - 1)
+    //{
+    //    int VUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, int3(0, 1, 0));
+    //    if (vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 2)
+    //    {
+    //        vioFluidVelFieldDataY_correctVelBoundaryCondition[VUpLinearIndex] = vSolidVelFieldDataY_correctVelBoundaryCondition[VUpLinearIndex];
+    //    }
+    //}
+    //if (CurCoordIndex.z == GridResolution.z - 1)
+    //{
+    //    int WFrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, int3(0, 0, 1));
+    //    if (vMarkersFieldData_correctVelBoundaryCondition[CenterLinearIndex] == 2)
+    //    {
+    //        vioFluidVelFieldDataZ_correctVelBoundaryCondition[WFrontLinearIndex] = vSolidVelFieldDataZ_correctVelBoundaryCondition[WFrontLinearIndex];
+    //    }
+    //}
+}
+
+RWStructuredBuffer<float> vioFluidSDFField_addFluid;
+[numthreads(NUMTHREADS, 1, 1)]
+void addFluid(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    //if (CurCoordIndex.x >= 1 && CurCoordIndex.x <= 10 && CurCoordIndex.y > 0 && CurCoordIndex.y < GridResolution.y - 1)
+    //{
+    //    vioFluidSDFField_addFluid[CurLinearIndex] = -FluidDomainValue;
+    //}
+    if (CurCoordIndex.x >= 1 && CurCoordIndex.x <= 10)
+    {
+        vioFluidSDFField_addFluid[CurLinearIndex] = -FluidDomainValue;
+    }
+}
+
+RWStructuredBuffer<float> vioFluidSDFField_removeFluid;
+[numthreads(NUMTHREADS, 1, 1)]
+void removeFluid(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    //if (CurCoordIndex.x >= GridResolution.x - 10 && CurCoordIndex.x <= GridResolution.x - 1 && CurCoordIndex.y > 0 && CurCoordIndex.y < GridResolution.y - 1)
+    //{
+    //    vioFluidSDFField_removeFluid[CurLinearIndex] = FluidDomainValue;
+    //}
+    if (CurCoordIndex.x >= GridResolution.x - 10 && CurCoordIndex.x <= GridResolution.x - 1)
+    {
+        vioFluidSDFField_removeFluid[CurLinearIndex] = FluidDomainValue;
+    }
+}
+
+float VelDataX_setFluidVel;
+RWStructuredBuffer<float> vioFluidVelFieldDataX_setFluidVel;
+[numthreads(NUMTHREADS, 1, 1)]
+void setFluidVel(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, int3(0, 0, 0));
+
+    //if (CurCoordIndex.x >= 1 && CurCoordIndex.x <= 10 && CurCoordIndex.y > 0 && CurCoordIndex.y < GridResolution.y - 1)
+    //{
+    //    vioFluidVelFieldDataX_setFluidVel[ULeftLinearIndex] = VelDataX_setFluidVel;
+    //}
+    if (CurCoordIndex.x >= 1 && CurCoordIndex.x <= 10)
+    {
+        vioFluidVelFieldDataX_setFluidVel[ULeftLinearIndex] = VelDataX_setFluidVel;
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildExtrapolationMarkers(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (CurrentDis == 0)
+    {
+        if (vScalarFieldData[CenterLinearIndex] == UNKNOWN)
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = UNKNOWN;
+        }
+        else
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = 0;
+        }
+    }
+    else
+    {
+        if (
+			(vioDisMarkersFieldData[CenterLinearIndex] == UNKNOWN) &&
+			(vioDisMarkersFieldData[LeftLinearIndex] == CurrentDis - 1 ||
+				vioDisMarkersFieldData[RightLinearIndex] == CurrentDis - 1 ||
+				vioDisMarkersFieldData[DownLinearIndex] == CurrentDis - 1 ||
+				vioDisMarkersFieldData[UpLinearIndex] == CurrentDis - 1 ||
+				vioDisMarkersFieldData[BackLinearIndex] == CurrentDis - 1 ||
+				vioDisMarkersFieldData[FrontLinearIndex] == CurrentDis - 1))
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = CurrentDis;
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void extrapolatingData(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (CurrentDis != 0 && vDisMarkersFieldData[CenterLinearIndex] == CurrentDis)
+    {
+        float NumOfValidNeighbor = 0.0;
+        vioScalarFieldData[CenterLinearIndex] = 0.0;
+        if (vDisMarkersFieldData[LeftLinearIndex] < CurrentDis)
+        {
+            vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[LeftLinearIndex];
+            NumOfValidNeighbor += 1.0;
+        }
+        if (vDisMarkersFieldData[RightLinearIndex] < CurrentDis)
+        {
+            vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[RightLinearIndex];
+            NumOfValidNeighbor += 1.0;
+        }
+        if (vDisMarkersFieldData[DownLinearIndex] < CurrentDis)
+        {
+            vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[DownLinearIndex];
+            NumOfValidNeighbor += 1.0;
+        }
+        if (vDisMarkersFieldData[UpLinearIndex] < CurrentDis)
+        {
+            vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[UpLinearIndex];
+            NumOfValidNeighbor += 1.0;
+        }
+        if (vDisMarkersFieldData[BackLinearIndex] < CurrentDis)
+        {
+            vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[BackLinearIndex];
+            NumOfValidNeighbor += 1.0;
+        }
+        if (vDisMarkersFieldData[FrontLinearIndex] < CurrentDis)
+        {
+            vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[FrontLinearIndex];
+            NumOfValidNeighbor += 1.0;
+        }
+
+        if (NumOfValidNeighbor != 0.0)
+        {
+            vioScalarFieldData[CenterLinearIndex] /= NumOfValidNeighbor;
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildExtrapolationMarkersOutwards(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (CurrentDis == 0)
+    {
+        if (vScalarFieldData[CenterLinearIndex] == UNKNOWN)
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = UNKNOWN;
+        }
+        else
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = 0;
+        }
+    }
+    else
+    {
+        if (vioDisMarkersFieldData[CenterLinearIndex] == CurrentDis - 1)
+        {
+            if (vioDisMarkersFieldData[LeftLinearIndex] == UNKNOWN)
+                vioDisMarkersFieldData[LeftLinearIndex] = CurrentDis;
+            if (vioDisMarkersFieldData[RightLinearIndex] == UNKNOWN)
+                vioDisMarkersFieldData[RightLinearIndex] = CurrentDis;
+            if (vioDisMarkersFieldData[DownLinearIndex] == UNKNOWN)
+                vioDisMarkersFieldData[DownLinearIndex] = CurrentDis;
+            if (vioDisMarkersFieldData[UpLinearIndex] == UNKNOWN)
+                vioDisMarkersFieldData[UpLinearIndex] = CurrentDis;
+            if (vioDisMarkersFieldData[BackLinearIndex] == UNKNOWN)
+                vioDisMarkersFieldData[BackLinearIndex] = CurrentDis;
+            if (vioDisMarkersFieldData[FrontLinearIndex] == UNKNOWN)
+                vioDisMarkersFieldData[FrontLinearIndex] = CurrentDis;
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildMarkersAndExtrapolatingData(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (CurrentDis == 0)
+    {
+        if (vioScalarFieldData[CenterLinearIndex] == UNKNOWN)
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = UNKNOWN;
+        }
+        else
+        {
+            vioDisMarkersFieldData[CenterLinearIndex] = 0;
+        }
+    }
+    else
+    {
+        if (vioDisMarkersFieldData[CenterLinearIndex] == UNKNOWN)
+        {   
+            int NumOfValidNeighbor = 0;
+            vioScalarFieldData[CenterLinearIndex] = 0.0;
+            
+            if(vioDisMarkersFieldData[LeftLinearIndex] == CurrentDis - 1)
+            {
+                vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[LeftLinearIndex];
+                NumOfValidNeighbor++;
+            }
+            
+            if(vioDisMarkersFieldData[RightLinearIndex] == CurrentDis - 1)
+            {
+                vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[RightLinearIndex];
+                NumOfValidNeighbor++;
+            }
+
+            if(vioDisMarkersFieldData[DownLinearIndex] == CurrentDis - 1)
+            {
+                vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[DownLinearIndex];
+                NumOfValidNeighbor++;
+            }
+            
+            if(vioDisMarkersFieldData[UpLinearIndex] == CurrentDis - 1)
+            {
+                vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[UpLinearIndex];
+                NumOfValidNeighbor++;
+            }
+            
+            if(vioDisMarkersFieldData[BackLinearIndex] == CurrentDis - 1)
+            {
+                vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[BackLinearIndex];
+                NumOfValidNeighbor++;
+            }
+            
+            if(vioDisMarkersFieldData[FrontLinearIndex] == CurrentDis - 1)
+            {
+                vioScalarFieldData[CenterLinearIndex] += vioScalarFieldData[FrontLinearIndex];
+                NumOfValidNeighbor++;
+            }
+            
+            if (NumOfValidNeighbor != 0)
+            {
+                vioScalarFieldData[CenterLinearIndex] /= NumOfValidNeighbor;
+                vioDisMarkersFieldData[CenterLinearIndex] = CurrentDis;
+            }
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void generateFluidDomainFromBBox(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurCellPos = GridOrigin + 0.5 * GridSpacing + float3(GridSpacing.x * CurCoordIndex.x, GridSpacing.y * CurCoordIndex.y, GridSpacing.z * CurCoordIndex.z);
+
+    if (isInsideSDF(vBoundarysSDFFieldData[CurLinearIndex]))
+    {
+        voFluidDomainFieldData[CurLinearIndex] = FluidDomainValue;
+    }
+    else
+    {
+        if (CurCellPos.x > vFluidDomainMin.x && CurCellPos.y > vFluidDomainMin.y && CurCellPos.z > vFluidDomainMin.z && CurCellPos.x < vFluidDomainMax.x && CurCellPos.y < vFluidDomainMax.y && CurCellPos.z < vFluidDomainMax.z)
+        {
+            voFluidDomainFieldData[CurLinearIndex] = -FluidDomainValue;
+        }
+        else
+        {
+            voFluidDomainFieldData[CurLinearIndex] = FluidDomainValue;
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void generateFluidDomainFromBoundingBoxs(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurCellPos = GridOrigin + 0.5 * GridSpacing + float3(GridSpacing.x * CurCoordIndex.x, GridSpacing.y * CurCoordIndex.y, GridSpacing.z * CurCoordIndex.z);
+
+    if (isInsideSDF(vBoundarysSDFFieldData[CurLinearIndex]))
+    {
+        voFluidDomainFieldData[CurLinearIndex] = FluidDomainValue;
+    }
+    else
+    {
+        int i;
+        
+        for (i = 0; i < vNumofBoundingBoxs; i++)
+        {
+            if (CurCellPos.x > vFluidBoundingBoxsMin[i].x &&
+                CurCellPos.y > vFluidBoundingBoxsMin[i].y && 
+                CurCellPos.z > vFluidBoundingBoxsMin[i].z &&
+                CurCellPos.x < vFluidBoundingBoxsMax[i].x && 
+                CurCellPos.y < vFluidBoundingBoxsMax[i].y &&
+                CurCellPos.z < vFluidBoundingBoxsMax[i].z)
+            {
+                voFluidDomainFieldData[CurLinearIndex] = -FluidDomainValue;
+                break;
+            }
+        }
+        if (i >= vNumofBoundingBoxs)
+        {
+            voFluidDomainFieldData[CurLinearIndex] = FluidDomainValue;
+        }
+    }
+}

@@ -1,0 +1,315 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel mixFieldXWithDensity
+#pragma kernel mixFieldYWithDensity
+#pragma kernel mixFieldZWithDensity
+#pragma kernel buildFluidDensity
+#pragma kernel buildFluidOutsideSDF
+#pragma kernel buildFluidInsideSDF
+#pragma kernel buildFluidSDFPostProcess
+#pragma kernel buildMixedFluidOutsideSDF
+
+StructuredBuffer<float> vWeightFieldA;
+StructuredBuffer<float> vWeightFieldB;
+StructuredBuffer<float> vVectorFieldAX;
+RWStructuredBuffer<float> vioVectorFieldBX;
+
+StructuredBuffer<float> vVectorFieldAY;
+RWStructuredBuffer<float> vioVectorFieldBY;
+
+StructuredBuffer<float> vVectorFieldAZ;
+RWStructuredBuffer<float> vioVectorFieldBZ;
+
+StructuredBuffer<float> vFluidDomainFieldData;
+StructuredBuffer<float> vSolidDomainFieldData;
+RWStructuredBuffer<float> vioFluidDensityFieldData;
+
+StructuredBuffer<float> vFluidDensityFieldData;
+RWStructuredBuffer<float> vioFluidOutsideSDFFieldData;
+
+RWStructuredBuffer<float> vioFluidInsideSDFFieldData;
+
+RWStructuredBuffer<float> vioFluidSDFFieldData;
+
+StructuredBuffer<float> vGridFluidDensityFieldData;
+StructuredBuffer<float> vMixedFluidDensityFieldData;
+StructuredBuffer<float> vGridFluidOutsideSDFFieldData;
+RWStructuredBuffer<float> vioMixedFluidOutsideSDFFieldData;
+
+[numthreads(NUMTHREADS, 1, 1)]
+void mixFieldXWithDensity(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    
+    int3 CurCoordIndexX = transLinearIndex2Coord(CurLinearIndex, GridResolutionX);
+
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndexX, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndexX, GridResolution, int3(0, 0, 0));
+
+    float WeightA = (vWeightFieldA[LeftLinearIndex] + vWeightFieldA[RightLinearIndex]) * 0.5;
+    float WeightB = (vWeightFieldB[LeftLinearIndex] + vWeightFieldB[RightLinearIndex]) * 0.5;
+
+    if (WeightA + WeightB > FLT_EPSILON)
+        vioVectorFieldBX[CurLinearIndex] = (WeightA * vVectorFieldAX[CurLinearIndex] + WeightB * vioVectorFieldBX[CurLinearIndex]) / (WeightA + WeightB);
+    else
+        return;
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void mixFieldYWithDensity(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    
+    int3 CurCoordIndexY = transLinearIndex2Coord(CurLinearIndex, GridResolutionY);
+    
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndexY, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndexY, GridResolution, int3(0, 0, 0));
+
+    float WeightA = (vWeightFieldA[DownLinearIndex] + vWeightFieldA[UpLinearIndex]) * 0.5;
+    float WeightB = (vWeightFieldB[DownLinearIndex] + vWeightFieldB[UpLinearIndex]) * 0.5;
+
+    if (WeightA + WeightB > FLT_EPSILON)
+        vioVectorFieldBY[CurLinearIndex] = (WeightA * vVectorFieldAY[CurLinearIndex] + WeightB * vioVectorFieldBY[CurLinearIndex]) / (WeightA + WeightB);
+    else
+        return;
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void mixFieldZWithDensity(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+    
+    int3 CurCoordIndexZ = transLinearIndex2Coord(CurLinearIndex, GridResolutionZ);
+
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndexZ, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndexZ, GridResolution, int3(0, 0, 0));
+
+    float WeightA = (vWeightFieldA[BackLinearIndex] + vWeightFieldA[FrontLinearIndex]) * 0.5;
+    float WeightB = (vWeightFieldB[BackLinearIndex] + vWeightFieldB[FrontLinearIndex]) * 0.5;
+
+    if (WeightA + WeightB > FLT_EPSILON)
+        vioVectorFieldBZ[CurLinearIndex] = (WeightA * vVectorFieldAZ[CurLinearIndex] + WeightB * vioVectorFieldBZ[CurLinearIndex]) / (WeightA + WeightB);
+    else
+        return;
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidDensity(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (isInsideSDF(vFluidDomainFieldData[CenterLinearIndex]) && !isInsideSDF(vSolidDomainFieldData[CenterLinearIndex]))
+    {
+        if (isInsideAir(vFluidDomainFieldData[LeftLinearIndex], vSolidDomainFieldData[LeftLinearIndex]) ||
+			isInsideAir(vFluidDomainFieldData[RightLinearIndex], vSolidDomainFieldData[RightLinearIndex]) ||
+			isInsideAir(vFluidDomainFieldData[DownLinearIndex], vSolidDomainFieldData[DownLinearIndex]) ||
+			isInsideAir(vFluidDomainFieldData[UpLinearIndex], vSolidDomainFieldData[UpLinearIndex]) ||
+			isInsideAir(vFluidDomainFieldData[BackLinearIndex], vSolidDomainFieldData[BackLinearIndex]) ||
+			isInsideAir(vFluidDomainFieldData[FrontLinearIndex], vSolidDomainFieldData[FrontLinearIndex]))
+        {
+            vioFluidDensityFieldData[CenterLinearIndex] = FluidSurfaceDensity;
+        }
+        else
+        {
+            vioFluidDensityFieldData[CenterLinearIndex] = 1.0;
+        }
+    }
+    else
+    {
+        vioFluidDensityFieldData[CenterLinearIndex] = 0.0;
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidOutsideSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (CurrentDis == 0)
+    {
+        if (isInsideSDF(vSolidDomainFieldData[CenterLinearIndex]))
+        {
+            vioFluidOutsideSDFFieldData[CenterLinearIndex] = 0.0;
+        }
+        else
+        {
+            if (isFloatEQ(vFluidDensityFieldData[CenterLinearIndex], FluidSurfaceDensity))
+            {
+                vioFluidOutsideSDFFieldData[CenterLinearIndex] = (0.5 - FluidSurfaceDensity);
+            }
+            else
+            {
+                if (isFloatEQ(vFluidDensityFieldData[CenterLinearIndex], 1.0))
+                {
+                    vioFluidOutsideSDFFieldData[CenterLinearIndex] = 0.0;
+                }
+                else
+                {
+                    vioFluidOutsideSDFFieldData[CenterLinearIndex] = UNKNOWN;
+                }
+            }
+        }
+    }
+    else
+    {
+        if (vioFluidOutsideSDFFieldData[CenterLinearIndex] == UNKNOWN)
+        {
+            if (isFloatEQ(vioFluidOutsideSDFFieldData[LeftLinearIndex], (CurrentDis + (0.5 - FluidSurfaceDensity) - 1)) ||
+				isFloatEQ(vioFluidOutsideSDFFieldData[RightLinearIndex], (CurrentDis + (0.5 - FluidSurfaceDensity) - 1)) ||
+				isFloatEQ(vioFluidOutsideSDFFieldData[DownLinearIndex], (CurrentDis + (0.5 - FluidSurfaceDensity) - 1)) ||
+				isFloatEQ(vioFluidOutsideSDFFieldData[UpLinearIndex], (CurrentDis + (0.5 - FluidSurfaceDensity) - 1)) ||
+				isFloatEQ(vioFluidOutsideSDFFieldData[BackLinearIndex], (CurrentDis + (0.5 - FluidSurfaceDensity) - 1)) ||
+				isFloatEQ(vioFluidOutsideSDFFieldData[FrontLinearIndex], (CurrentDis + (0.5 - FluidSurfaceDensity) - 1)))
+            {
+                vioFluidOutsideSDFFieldData[CenterLinearIndex] = CurrentDis + (0.5 - FluidSurfaceDensity);
+            }
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidInsideSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (CurrentDis == 0)
+    {
+        if (isInsideSDF(vSolidDomainFieldData[CenterLinearIndex]))
+        {
+            vioFluidInsideSDFFieldData[CenterLinearIndex] = 0.0;
+        }
+        else
+        {
+            if (isFloatEQ(vFluidDensityFieldData[CenterLinearIndex], FluidSurfaceDensity))
+            {
+                vioFluidInsideSDFFieldData[CenterLinearIndex] = (FluidSurfaceDensity - 0.5);
+            }
+            else
+            {
+                if (isFloatEQ(vFluidDensityFieldData[CenterLinearIndex], 0.0))
+                {
+                    vioFluidInsideSDFFieldData[CenterLinearIndex] = 0.0;
+                }
+                else
+                {
+                    vioFluidInsideSDFFieldData[CenterLinearIndex] = UNKNOWN;
+                }
+            }
+        }
+    }
+    else
+    {
+        if (vioFluidInsideSDFFieldData[CenterLinearIndex] == UNKNOWN)
+        {
+            if (isFloatEQ(vioFluidInsideSDFFieldData[LeftLinearIndex], (CurrentDis + (FluidSurfaceDensity - 0.5) - 1)) ||
+				isFloatEQ(vioFluidInsideSDFFieldData[RightLinearIndex], (CurrentDis + (FluidSurfaceDensity - 0.5) - 1)) ||
+				isFloatEQ(vioFluidInsideSDFFieldData[DownLinearIndex], (CurrentDis + (FluidSurfaceDensity - 0.5) - 1)) ||
+				isFloatEQ(vioFluidInsideSDFFieldData[UpLinearIndex], (CurrentDis + (FluidSurfaceDensity - 0.5) - 1)) ||
+				isFloatEQ(vioFluidInsideSDFFieldData[BackLinearIndex], (CurrentDis + (FluidSurfaceDensity - 0.5) - 1)) ||
+				isFloatEQ(vioFluidInsideSDFFieldData[FrontLinearIndex], (CurrentDis + (FluidSurfaceDensity - 0.5) - 1)))
+            {
+                vioFluidInsideSDFFieldData[CenterLinearIndex] = CurrentDis + (FluidSurfaceDensity - 0.5);
+            }
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidSDFPostProcess(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    if (vioFluidSDFFieldData[CurLinearIndex] < 0.0)
+    {
+        vioFluidSDFFieldData[CurLinearIndex] = 0.0;
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildMixedFluidOutsideSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int LeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int RightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int DownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int UpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int BackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+    int FrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+
+    if (isFloatEQ(vGridFluidDensityFieldData[CenterLinearIndex], FluidSurfaceDensity))
+    {
+        vioMixedFluidOutsideSDFFieldData[CenterLinearIndex] = (0.5 - vMixedFluidDensityFieldData[CenterLinearIndex]);
+        if (vioMixedFluidOutsideSDFFieldData[CenterLinearIndex] < 0.0)
+        {
+            vioMixedFluidOutsideSDFFieldData[CenterLinearIndex] = 0.0;
+        }
+    }
+    else
+    {
+        vioMixedFluidOutsideSDFFieldData[CenterLinearIndex] = vGridFluidOutsideSDFFieldData[CenterLinearIndex];
+    }
+}

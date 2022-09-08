@@ -1,0 +1,355 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel buildTaylorVortexMatrixA
+#pragma kernel generateCurlField
+#pragma kernel generateCurlFieldVortexLeapFrogging
+#pragma kernel buildRhs
+#pragma kernel updateCurlField
+#pragma kernel generateInitVelFieldX
+#pragma kernel generateInitVelFieldY
+#pragma kernel fillArgumentVelFieldX
+#pragma kernel fillArgumentVelFieldY
+#pragma kernel generateInitVelFieldXYZ
+#pragma kernel generate2DCurl
+#pragma kernel generate2DVort
+#pragma kernel generateDensityFieldVortexLeapFrogging
+
+uniform float3 Scale_buildTaylorVortexMatrixA;
+RWStructuredBuffer<float> voFdmMatrixData_buildTaylorVortexMatrixA;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildTaylorVortexMatrixA(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+
+    voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex] = 0; //Center
+    voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex + 1] = 0; //Right
+    voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex + 2] = 0; //Up
+    voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex + 3] = 0; //Front
+
+    voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex] += 2 * Scale_buildTaylorVortexMatrixA.x;
+    voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex] += 2 * Scale_buildTaylorVortexMatrixA.y;
+    
+    if (CurCoordIndex.x + 1 < GridResolution.x)
+    {
+        voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex + 1] -= Scale_buildTaylorVortexMatrixA.x;
+    }
+    
+    if (CurCoordIndex.y + 1 < GridResolution.y)
+    {
+        voFdmMatrixData_buildTaylorVortexMatrixA[4 * CenterLinearIndex + 2] -= Scale_buildTaylorVortexMatrixA.y;
+    }
+}
+
+float Distance_generateCurlField;
+RWStructuredBuffer<float> voCurlField_generateCurlField;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateCurlField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+
+    float3 Pos = float3(GridOrigin.x + GridSpacing.x * CurCoordIndex.x, GridOrigin.y + GridSpacing.y * CurCoordIndex.y, 0.0f) - float3(M_PI, M_PI, 0.0f);
+    Pos = Pos - float3(0.0f, 0.0f, Pos.z);
+    float3 Vort_pos0 = float3(-0.5f * Distance_generateCurlField, 0, 0);
+    float3 Vort_pos1 = float3(+0.5f * Distance_generateCurlField, 0, 0);
+    float R_sqr0 = distance(Pos, Vort_pos0) * distance(Pos, Vort_pos0);
+    float R_sqr1 = distance(Pos, Vort_pos1) * distance(Pos, Vort_pos1);
+    voCurlField_generateCurlField[CenterLinearIndex] = +1.0f / 0.3f * (2.0f - R_sqr0 / 0.09f) * exp(0.5f * (1.0f - R_sqr0 / 0.09f));
+    voCurlField_generateCurlField[CenterLinearIndex] += 1.0f / 0.3f * (2.0f - R_sqr1 / 0.09f) * exp(0.5f * (1.0f - R_sqr1 / 0.09f));
+}
+
+float DistanceA_generateCurlFieldVortexLeapFrogging;
+float DistanceB_generateCurlFieldVortexLeapFrogging;
+RWStructuredBuffer<float> voCurlField_generateCurlFieldVortexLeapFrogging;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateCurlFieldVortexLeapFrogging(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+
+    float a = 0.02f;
+    
+    float3 Pos = float3(GridOrigin.x + GridSpacing.x * CurCoordIndex.x, GridOrigin.y + GridSpacing.y * CurCoordIndex.y, 0.0f) - float3(M_PI, M_PI, 0.0f);
+    Pos = Pos - float3(0.0f, 0.0f, Pos.z);
+    float3 Vort_pos0 = float3(-0.5f * DistanceA_generateCurlFieldVortexLeapFrogging, -2.0f, 0);
+    float3 Vort_pos1 = float3(+0.5f * DistanceA_generateCurlFieldVortexLeapFrogging, -2.0f, 0);
+    float3 Vort_pos2 = float3(-0.5f * DistanceB_generateCurlFieldVortexLeapFrogging, -2.0f, 0);
+    float3 Vort_pos3 = float3(+0.5f * DistanceB_generateCurlFieldVortexLeapFrogging, -2.0f, 0);
+    float R_sqr0 = distance(Pos, Vort_pos0) * distance(Pos, Vort_pos0);
+    float R_sqr1 = distance(Pos, Vort_pos1) * distance(Pos, Vort_pos1);
+    float R_sqr2 = distance(Pos, Vort_pos2) * distance(Pos, Vort_pos2);
+    float R_sqr3 = distance(Pos, Vort_pos3) * distance(Pos, Vort_pos3);
+    float c_a = 1000.0 / (2.0 * 3.1415926) * exp(-0.5 * (R_sqr0) / a / a);
+    float c_b = -1000.0 / (2.0 * 3.1415926) * exp(-0.5 * (R_sqr1) / a / a);
+    float c_c = 1000.0 / (2.0 * 3.1415926) * exp(-0.5 * (R_sqr2) / a / a);
+    float c_d = -1000.0 / (2.0 * 3.1415926) * exp(-0.5 * (R_sqr3) / a / a);
+    voCurlField_generateCurlFieldVortexLeapFrogging[CenterLinearIndex] = c_a;
+    voCurlField_generateCurlFieldVortexLeapFrogging[CenterLinearIndex] += c_b;
+    voCurlField_generateCurlFieldVortexLeapFrogging[CenterLinearIndex] += c_c;
+    voCurlField_generateCurlFieldVortexLeapFrogging[CenterLinearIndex] += c_d;
+}
+
+StructuredBuffer<float> vCurlField_buildRhs;
+RWStructuredBuffer<float> voRhsValue_buildRhs;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildRhs(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(1, 1, 0);
+    //int3 ArgumentResolution = GridResolution + int3(0, 0, 0);
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 0));
+
+    voRhsValue_buildRhs[CenterLinearIndex] = vCurlField_buildRhs[ArgumentCenterLinearIndex];
+}
+
+StructuredBuffer<float> vPressureValue_updateCurlField;
+RWStructuredBuffer<float> voCurlField_updateCurlField;
+[numthreads(NUMTHREADS, 1, 1)]
+void updateCurlField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(1, 1, 0);
+    //int3 ArgumentResolution = GridResolution + int3(1, 1, 1);
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 0));
+
+    voCurlField_updateCurlField[ArgumentCenterLinearIndex] = vPressureValue_updateCurlField[CenterLinearIndex];
+}
+
+float vScale_generateInitVelFieldX;
+StructuredBuffer<float> vCurlField_generateInitVelFieldX;
+RWStructuredBuffer<float> voVelFieldX_generateInitVelFieldX;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateInitVelFieldX(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(0, 1, 0);
+    int ArgumentUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 1, 0));
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 0));
+
+    voVelFieldX_generateInitVelFieldX[CenterLinearIndex] = vScale_generateInitVelFieldX * (vCurlField_generateInitVelFieldX[ArgumentUpLinearIndex] - vCurlField_generateInitVelFieldX[ArgumentCenterLinearIndex]);
+}
+
+float vScale_generateInitVelFieldY;
+StructuredBuffer<float> vCurlField_generateInitVelFieldY;
+RWStructuredBuffer<float> voVelFieldY_generateInitVelFieldY;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateInitVelFieldY(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(1, 0, 0);
+    int ArgumentRightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(1, 0, 0));
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 0));
+
+    voVelFieldY_generateInitVelFieldY[CenterLinearIndex] = -vScale_generateInitVelFieldY * (vCurlField_generateInitVelFieldY[ArgumentRightLinearIndex] - vCurlField_generateInitVelFieldY[ArgumentCenterLinearIndex]);
+}
+
+StructuredBuffer<float> vCurlFieldX_generateInitVelFieldXYZ;
+StructuredBuffer<float> vCurlFieldY_generateInitVelFieldXYZ;
+StructuredBuffer<float> vCurlFieldZ_generateInitVelFieldXYZ;
+RWStructuredBuffer<float> voVelFieldX_generateInitVelFieldXYZ;
+RWStructuredBuffer<float> voVelFieldY_generateInitVelFieldXYZ;
+RWStructuredBuffer<float> voVelFieldZ_generateInitVelFieldXYZ;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateInitVelFieldXYZ(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    //int3 ArgumentResolution = GridResolution + int3(1, 1, 1);
+    int ArgumentRightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(1, 0, 0));
+    int ArgumentUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 1, 0));
+    int ArgumentFrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 1));
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    int ArgumentLeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(-1, 0, 0));
+    int ArgumentDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, -1, 0));
+    int ArgumentBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, -1));
+
+    voVelFieldX_generateInitVelFieldXYZ[CenterLinearIndex] = 
+    ((vCurlFieldZ_generateInitVelFieldXYZ[ArgumentUpLinearIndex] - vCurlFieldZ_generateInitVelFieldXYZ[ArgumentDownLinearIndex])
+     - (vCurlFieldY_generateInitVelFieldXYZ[ArgumentFrontLinearIndex] - vCurlFieldY_generateInitVelFieldXYZ[ArgumentBackLinearIndex]))
+    / (2.0f * GridSpacing.x);
+    
+    voVelFieldY_generateInitVelFieldXYZ[CenterLinearIndex] =
+    ((vCurlFieldX_generateInitVelFieldXYZ[ArgumentFrontLinearIndex] - vCurlFieldX_generateInitVelFieldXYZ[ArgumentBackLinearIndex])
+     - (vCurlFieldZ_generateInitVelFieldXYZ[ArgumentRightLinearIndex] - vCurlFieldZ_generateInitVelFieldXYZ[ArgumentLeftLinearIndex]))
+    / (2.0f * GridSpacing.y);
+    
+    voVelFieldY_generateInitVelFieldXYZ[CenterLinearIndex] =
+    ((vCurlFieldY_generateInitVelFieldXYZ[ArgumentRightLinearIndex] - vCurlFieldY_generateInitVelFieldXYZ[ArgumentLeftLinearIndex])
+     - (vCurlFieldX_generateInitVelFieldXYZ[ArgumentUpLinearIndex] - vCurlFieldX_generateInitVelFieldXYZ[ArgumentDownLinearIndex]))
+    / (2.0f * GridSpacing.z);
+}
+
+StructuredBuffer<float> vVelFieldX_fillArgumentVelFieldX;
+RWStructuredBuffer<float> voVelFieldX_fillArgumentVelFieldX;
+[numthreads(NUMTHREADS, 1, 1)]
+void fillArgumentVelFieldX(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(0, 0, 2);
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 1));
+
+    voVelFieldX_fillArgumentVelFieldX[ArgumentCenterLinearIndex] = vVelFieldX_fillArgumentVelFieldX[CenterLinearIndex];
+}
+
+StructuredBuffer<float> vVelFieldY_fillArgumentVelFieldY;
+RWStructuredBuffer<float> voVelFieldY_fillArgumentVelFieldY;
+[numthreads(NUMTHREADS, 1, 1)]
+void fillArgumentVelFieldY(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(0, 0, 2);
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 1));
+
+    voVelFieldY_fillArgumentVelFieldY[ArgumentCenterLinearIndex] = vVelFieldY_fillArgumentVelFieldY[CenterLinearIndex];
+}
+
+float vScale_generate2DCurl;
+StructuredBuffer<float> vVelFieldX_generate2DCurl;
+StructuredBuffer<float> vVelFieldY_generate2DCurl;
+RWStructuredBuffer<float> voCurlField_generate2DCurl;
+[numthreads(NUMTHREADS, 1, 1)]
+void generate2DCurl(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolutionX = GridResolution + int3(0, -1, 0);
+    int3 ArgumentResolutionY = GridResolution + int3(-1, 0, 0);
+    int ArgumentDownLinearIndexX = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolutionX, int3(0, -1, 0));
+    int ArgumentCenterLinearIndexX = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolutionX, int3(0, 0, 0));
+    int ArgumentLeftLinearIndexY = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolutionY, int3(-1, 0, 0));
+    int ArgumentCenterLinearIndexY = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolutionY, int3(0, 0, 0));
+
+    voCurlField_generate2DCurl[CenterLinearIndex] = vScale_generate2DCurl * (vVelFieldX_generate2DCurl[ArgumentCenterLinearIndexX] - vVelFieldX_generate2DCurl[ArgumentDownLinearIndexX] + vVelFieldY_generate2DCurl[ArgumentLeftLinearIndexY] - vVelFieldY_generate2DCurl[ArgumentCenterLinearIndexY]);
+}
+
+StructuredBuffer<float> vCurlField_generate2DVort;
+RWStructuredBuffer<float> voVortField_generate2DVort;
+[numthreads(NUMTHREADS, 1, 1)]
+void generate2DVort(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    int3 ArgumentResolution = GridResolution + int3(1, 1, 0);
+
+    int ArgumentCenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 0, 0));
+    int ArgumentRightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(1, 0, 0));
+    int ArgumentUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(0, 1, 0));
+    int ArgumentRightUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, ArgumentResolution, int3(1, 1, 0));
+
+    voVortField_generate2DVort[CenterLinearIndex] = 0.25f * (vCurlField_generate2DVort[ArgumentCenterLinearIndex] + vCurlField_generate2DVort[ArgumentRightLinearIndex] + vCurlField_generate2DVort[ArgumentUpLinearIndex] + vCurlField_generate2DVort[ArgumentRightUpLinearIndex]);
+}
+
+float Rho_h_generateDensityFieldVortexLeapFrogging;
+float Rho_w_generateDensityFieldVortexLeapFrogging;
+RWStructuredBuffer<float> voDensityField_generateDensityFieldVortexLeapFrogging;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateDensityFieldVortexLeapFrogging(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int CenterLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, int3(0, 0, 0));
+    
+    float3 Pos = float3(GridOrigin.x + GridSpacing.x * (CurCoordIndex.x + 0.5f), GridOrigin.y + GridSpacing.y * (CurCoordIndex.y + 0.5f), 0.0f);
+    Pos = Pos - float3(0.0f, 0.0f, Pos.z);
+    
+    if (Rho_h_generateDensityFieldVortexLeapFrogging - Rho_w_generateDensityFieldVortexLeapFrogging < Pos.y
+        && Pos.y < Rho_h_generateDensityFieldVortexLeapFrogging + Rho_w_generateDensityFieldVortexLeapFrogging
+        && Pos.x > Rho_w_generateDensityFieldVortexLeapFrogging
+        && Pos.x < 2 * M_PI - Rho_w_generateDensityFieldVortexLeapFrogging)
+    {
+        voDensityField_generateDensityFieldVortexLeapFrogging[CenterLinearIndex] = 1.0f;
+    }
+}

@@ -1,0 +1,129 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel computeAlpha
+#pragma kernel computeBeta
+#pragma kernel updateP
+
+#define TEMPNUMTHREADS 1024
+
+uniform RWStructuredBuffer<float> TempResultA;
+uniform RWStructuredBuffer<float> TempResultB;
+uniform RWStructuredBuffer<int> GroupCounter;
+
+groupshared float sharedMemA[TEMPNUMTHREADS];
+groupshared float sharedMemB[TEMPNUMTHREADS];
+
+int vTotalGroupsNum;
+StructuredBuffer<float> vR;
+StructuredBuffer<float> vP;
+StructuredBuffer<float> vAP;
+RWStructuredBuffer<float> voAlpha;
+RWStructuredBuffer<float> voRkDotRk;
+
+float vThreshold;
+StructuredBuffer<float> vAlpha;
+StructuredBuffer<float> vRkDotRk;
+RWStructuredBuffer<float> vioX;
+RWStructuredBuffer<float> vioR;
+RWStructuredBuffer<float> voBeta;
+
+RWStructuredBuffer<float> vioP;
+StructuredBuffer<float> vBeta;
+
+[numthreads(TEMPNUMTHREADS, 1, 1)]
+void computeAlpha(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x >= TotalThreadNum)
+    {
+        sharedMemA[GI] = 0;
+        sharedMemB[GI] = 0;
+    }
+    else
+    {
+        sharedMemA[GI] = vR[DTid.x] * vR[DTid.x];
+        sharedMemB[GI] = vP[DTid.x] * vAP[DTid.x];
+    }
+    GroupMemoryBarrierWithGroupSync(); 
+
+    for (uint s = TEMPNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+        {
+            sharedMemA[GI] += sharedMemA[GI + s];
+            sharedMemB[GI] += sharedMemB[GI + s];
+        }    
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (GI == 0)
+    {
+        TempResultA[Gid.x] = sharedMemA[0];
+        TempResultB[Gid.x] = sharedMemB[0];
+        int FinishedGroupsNum;
+        InterlockedAdd(GroupCounter[0], 1, FinishedGroupsNum);
+        if (FinishedGroupsNum == vTotalGroupsNum - 1)
+        {
+            for (int i = 1; i < vTotalGroupsNum;i++)
+            {
+                TempResultA[0] += TempResultA[i];
+                TempResultB[0] += TempResultB[i];
+            }
+            voAlpha[0] = TempResultA[0] / TempResultB[0];
+            voRkDotRk[0] = TempResultA[0];
+        }
+    }
+}
+
+[numthreads(TEMPNUMTHREADS, 1, 1)]
+void computeBeta(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x >= TotalThreadNum)
+    {
+        sharedMemA[GI] = 0;
+    }
+    else
+    {
+        vioX[DTid.x] += vP[DTid.x] * vAlpha[0];
+        vioR[DTid.x] -= vAP[DTid.x] * vAlpha[0];
+        sharedMemA[GI] = vioR[DTid.x] * vioR[DTid.x];
+
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint s = TEMPNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+        {
+            sharedMemA[GI] += sharedMemA[GI + s];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (GI == 0)
+    {
+        TempResultA[Gid.x] = sharedMemA[0];
+        int FinishedGroupsNum;
+        InterlockedAdd(GroupCounter[0], 1, FinishedGroupsNum);
+        if (FinishedGroupsNum == vTotalGroupsNum - 1)
+        {
+            for (int i = 1; i < vTotalGroupsNum; i++)
+            {
+                TempResultA[0] += TempResultA[i];
+            }
+            if (TempResultA[0] >= vThreshold * vThreshold)
+                voBeta[0] = TempResultA[0] / vRkDotRk[0];
+            else
+                voBeta[0] = -1;
+        }
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void updateP(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    vioP[CurLinearIndex] = vioP[CurLinearIndex] * vBeta[0] + vR[CurLinearIndex];
+}

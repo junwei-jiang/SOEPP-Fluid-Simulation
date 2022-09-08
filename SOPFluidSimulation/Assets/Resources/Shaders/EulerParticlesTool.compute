@@ -1,0 +1,663 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel generateParticlesInSDF
+#pragma kernel generateParticlesInSDFExcludePrevious
+#pragma kernel generateParticlesInBoundingBox
+#pragma kernel transferParticlesNumToBuffer
+#pragma kernel deleteOutsideParticles
+#pragma kernel transferCCSField2Particles
+#pragma kernel transferParticles2CCSField
+#pragma kernel normalizeCCSField
+#pragma kernel advectParticles
+#pragma kernel buildFluidDomain
+#pragma kernel statisticalFluidDensity
+#pragma kernel buildFluidMarkers
+#pragma kernel buildFluidMarkersWithEmitBox
+
+StructuredBuffer<float> vAdditionalFluidSDFData_generateParticlesInSDF;
+StructuredBuffer<float> vSolidSDFData_generateParticlesInSDF;
+RWStructuredBuffer<float> vioParticlesPos_generateParticlesInSDF;
+int vParticlesPerGrid_generateParticlesInSDF = 8;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateParticlesInSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    if (isInsideSDF(vAdditionalFluidSDFData_generateParticlesInSDF[CurLinearIndex]) && !isInsideSDF(vSolidSDFData_generateParticlesInSDF[CurLinearIndex]))
+    {
+        int NewParticleIndex;
+        float3 NewParticlePos;
+        int3 CurGridCoord = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+        
+        for (int i = 0; i < vParticlesPerGrid_generateParticlesInSDF; i++)
+        {
+            InterlockedAdd(ParticlesNum[0], 1, NewParticleIndex);
+            if (NewParticleIndex >= MaxParticlesNum)
+            {
+                ParticlesNum[0] = MaxParticlesNum;
+                return;
+            }
+            
+            NewParticlePos = (CurGridCoord + Random4DTo3D(float4(CurGridCoord, SimulationTime + i))) * GridSpacing + GridOrigin;
+            
+            vioParticlesPos_generateParticlesInSDF[NewParticleIndex * 3] = NewParticlePos.x;
+            vioParticlesPos_generateParticlesInSDF[NewParticleIndex * 3 + 1] = NewParticlePos.y;
+            vioParticlesPos_generateParticlesInSDF[NewParticleIndex * 3 + 2] = NewParticlePos.z;
+        }
+    }
+}
+
+StructuredBuffer<float> vAdditionalFluidSDFData_generateParticlesInSDFExcludePrevious;
+StructuredBuffer<float> vSolidSDFData_generateParticlesInSDFExcludePrevious;
+RWStructuredBuffer<float> vioParticlesPos_generateParticlesInSDFExcludePrevious;
+StructuredBuffer<float> vPreviousFluidSDFData_generateParticlesInSDFExcludePrevious;
+int vParticlesPerGrid_generateParticlesInSDFExcludePrevious = 8;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateParticlesInSDFExcludePrevious(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    if (isInsideSDF(vAdditionalFluidSDFData_generateParticlesInSDFExcludePrevious[CurLinearIndex]) &&
+        !isInsideSDF(vSolidSDFData_generateParticlesInSDFExcludePrevious[CurLinearIndex]) &&
+        !isInsideSDF(vPreviousFluidSDFData_generateParticlesInSDFExcludePrevious[CurLinearIndex])
+        )
+    {
+        int NewParticleIndex;
+        float3 NewParticlePos;
+        int3 CurGridCoord = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+        
+        for (int i = 0; i < vParticlesPerGrid_generateParticlesInSDFExcludePrevious; i++)
+        {
+            InterlockedAdd(ParticlesNum[0], 1, NewParticleIndex);
+            if (NewParticleIndex >= MaxParticlesNum)
+            {
+                ParticlesNum[0] = MaxParticlesNum;
+                return;
+            }
+            
+            NewParticlePos = (CurGridCoord + Random4DTo3D(float4(CurGridCoord, SimulationTime + i))) * GridSpacing + GridOrigin;
+            
+            vioParticlesPos_generateParticlesInSDFExcludePrevious[NewParticleIndex * 3] = NewParticlePos.x;
+            vioParticlesPos_generateParticlesInSDFExcludePrevious[NewParticleIndex * 3 + 1] = NewParticlePos.y;
+            vioParticlesPos_generateParticlesInSDFExcludePrevious[NewParticleIndex * 3 + 2] = NewParticlePos.z;
+        }
+    }
+}
+
+StructuredBuffer<float> vSolidSDFData_generateParticlesInBoundingBox;
+RWStructuredBuffer<float> vioParticlesPos_generateParticlesInBoundingBox;
+float3 vBoxMin_generateParticlesInBoundingBox, vBoxMax_generateParticlesInBoundingBox;
+int vParticlesPerGrid_generateParticlesInBoundingBox = 8;
+[numthreads(NUMTHREADS, 1, 1)]
+void generateParticlesInBoundingBox(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurCellMin = GridOrigin + GridSpacing * CurCoordIndex;
+    float3 CurCellMax = CurCellMin + GridSpacing;
+    
+    if (CurCellMin.x >= vBoxMax_generateParticlesInBoundingBox.x || CurCellMax.x <= vBoxMin_generateParticlesInBoundingBox.x ||
+        CurCellMin.y >= vBoxMax_generateParticlesInBoundingBox.y || CurCellMax.y <= vBoxMin_generateParticlesInBoundingBox.y ||
+        CurCellMin.z >= vBoxMax_generateParticlesInBoundingBox.z || CurCellMax.z <= vBoxMin_generateParticlesInBoundingBox.z ||
+        isInsideSDF(vSolidSDFData_generateParticlesInBoundingBox[CurLinearIndex]))
+        return;
+    
+    int NewParticleIndex;
+    float3 NewParticlePos;
+    
+    for (int i = 0; i < vParticlesPerGrid_generateParticlesInBoundingBox; i++)
+    {
+        NewParticlePos = CurCellMin + Random4DTo3D(float4(CurCoordIndex, SimulationTime + i)) * GridSpacing;
+            
+        if (NewParticlePos.x > vBoxMin_generateParticlesInBoundingBox.x && NewParticlePos.x < vBoxMax_generateParticlesInBoundingBox.x &&
+            NewParticlePos.y > vBoxMin_generateParticlesInBoundingBox.y && NewParticlePos.y < vBoxMax_generateParticlesInBoundingBox.y &&
+            NewParticlePos.z > vBoxMin_generateParticlesInBoundingBox.z && NewParticlePos.z < vBoxMax_generateParticlesInBoundingBox.z)
+        {
+            InterlockedAdd(ParticlesNum[0], 1, NewParticleIndex);
+            
+            if (NewParticleIndex >= MaxParticlesNum)
+            {
+                ParticlesNum[0] = MaxParticlesNum;
+                return;
+            }
+        
+            vioParticlesPos_generateParticlesInBoundingBox[NewParticleIndex * 3] = NewParticlePos.x;
+            vioParticlesPos_generateParticlesInBoundingBox[NewParticleIndex * 3 + 1] = NewParticlePos.y;
+            vioParticlesPos_generateParticlesInBoundingBox[NewParticleIndex * 3 + 2] = NewParticlePos.z;
+        }
+    }
+}
+
+RWStructuredBuffer<int> voParticlesNum_transferParticlesNumToBuffer;
+[numthreads(1, 1, 1)]
+void transferParticlesNumToBuffer()
+{
+    voParticlesNum_transferParticlesNumToBuffer[0] = ParticlesNum[0];
+    ParticlesNum[0] = 0;
+}
+
+StructuredBuffer<int> vPreviousParticlesNum_deleteOutsideParticles;
+StructuredBuffer<float> vParticlesPos_deleteOutsideParticles;
+StructuredBuffer<float> vParticlesVel_deleteOutsideParticles;
+RWStructuredBuffer<float> voNewParticlesPos_deleteOutsideParticles;
+RWStructuredBuffer<float> voNewParticlesVel_deleteOutsideParticles;
+[numthreads(NUMTHREADS, 1, 1)]
+void deleteOutsideParticles(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= vPreviousParticlesNum_deleteOutsideParticles[0])
+        return;
+    
+    float3 SimulationDomainMin = GridOrigin;
+    float3 SimulationDomainMax = GridOrigin + GridResolution * GridSpacing;
+    
+    if (vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3] >= SimulationDomainMin.x &&
+        vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3] <= SimulationDomainMax.x &&
+        vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3 + 1] >= SimulationDomainMin.y &&
+        vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3 + 1] <= SimulationDomainMax.y &&
+        vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3 + 2] >= SimulationDomainMin.z &&
+        vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3 + 2] <= SimulationDomainMax.z)
+    {
+        int ParticleIndexInNewBuffer;
+        InterlockedAdd(ParticlesNum[0], 1, ParticleIndexInNewBuffer);
+        
+        voNewParticlesPos_deleteOutsideParticles[ParticleIndexInNewBuffer * 3] = vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3];
+        voNewParticlesPos_deleteOutsideParticles[ParticleIndexInNewBuffer * 3 + 1] = vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3 + 1];
+        voNewParticlesPos_deleteOutsideParticles[ParticleIndexInNewBuffer * 3 + 2] = vParticlesPos_deleteOutsideParticles[CurLinearIndex * 3 + 2];
+        voNewParticlesVel_deleteOutsideParticles[ParticleIndexInNewBuffer * 3] = vParticlesVel_deleteOutsideParticles[CurLinearIndex * 3];
+        voNewParticlesVel_deleteOutsideParticles[ParticleIndexInNewBuffer * 3 + 1] = vParticlesVel_deleteOutsideParticles[CurLinearIndex * 3 + 1];
+        voNewParticlesVel_deleteOutsideParticles[ParticleIndexInNewBuffer * 3 + 2] = vParticlesVel_deleteOutsideParticles[CurLinearIndex * 3 + 2];
+    }
+}
+
+StructuredBuffer<float> vParticlesPos_transferCCSField2Particles;
+RWStructuredBuffer<float> voParticlesScalarValue_transferCCSField2Particles;
+StructuredBuffer<float> vScalarFieldGridData_transferCCSField2Particles;
+int DataSpan_transferCCSField2Particles = 1;
+int DataOffset_transferCCSField2Particles = 0;
+int TransferAlg_transferCCSField2Particles = 0;
+[numthreads(NUMTHREADS, 1, 1)]
+void transferCCSField2Particles(uint3 id : SV_DispatchThreadID)
+{
+    int CurParticleLinearIndex = id.x;
+    
+    if (CurParticleLinearIndex >= ParticlesNum[0])
+        return;
+
+    float3 CurParticlesPos = float3(vParticlesPos_transferCCSField2Particles[3 * CurParticleLinearIndex], vParticlesPos_transferCCSField2Particles[3 * CurParticleLinearIndex + 1], vParticlesPos_transferCCSField2Particles[3 * CurParticleLinearIndex + 2]);
+    float3 RelPos = (CurParticlesPos - GridOrigin - GridSpacing * 0.5);
+    float3 RelPosIndex = RelPos / GridSpacing;
+    int3 DownBackLeftGridCoord = int3(floorCS(RelPosIndex.x), floorCS(RelPosIndex.y), floorCS(RelPosIndex.z));
+    float3 OffsetVector = (RelPos - float3((float) (DownBackLeftGridCoord.x) * GridSpacing.x, (float) (DownBackLeftGridCoord.y) * GridSpacing.y, (float) (DownBackLeftGridCoord.z) * GridSpacing.z)) / GridSpacing;
+
+    voParticlesScalarValue_transferCCSField2Particles[DataSpan_transferCCSField2Particles * CurParticleLinearIndex + DataOffset_transferCCSField2Particles] = 0.0;
+
+    if (TransferAlg_transferCCSField2Particles == LINEAR)
+    {
+        float WeightX[2] = { linearKernelFunc(OffsetVector.x), linearKernelFunc(OffsetVector.x - 1.0) };
+        float WeightY[2] = { linearKernelFunc(OffsetVector.y), linearKernelFunc(OffsetVector.y - 1.0) };
+        float WeightZ[2] = { linearKernelFunc(OffsetVector.z), linearKernelFunc(OffsetVector.z - 1.0) };
+
+        for (int z = 0; z < 2; z++)
+        {
+            for (int y = 0; y < 2; y++)
+            {
+                for (int x = 0; x < 2; x++)
+                {
+                    float Weight = WeightX[x] * WeightY[y] * WeightZ[z];
+                    voParticlesScalarValue_transferCCSField2Particles[DataSpan_transferCCSField2Particles * CurParticleLinearIndex + DataOffset_transferCCSField2Particles] += Weight * vScalarFieldGridData_transferCCSField2Particles[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x, y, z))];
+                }
+            }
+        }
+    }
+    else if (TransferAlg_transferCCSField2Particles == QUADRATIC)
+    {
+        float WeightX[4] = { quadraticKernelFunc(OffsetVector.x + 1.0), quadraticKernelFunc(OffsetVector.x), quadraticKernelFunc(OffsetVector.x - 1.0), quadraticKernelFunc(OffsetVector.x - 2.0) };
+        float WeightY[4] = { quadraticKernelFunc(OffsetVector.y + 1.0), quadraticKernelFunc(OffsetVector.y), quadraticKernelFunc(OffsetVector.y - 1.0), quadraticKernelFunc(OffsetVector.y - 2.0) };
+        float WeightZ[4] = { quadraticKernelFunc(OffsetVector.z + 1.0), quadraticKernelFunc(OffsetVector.z), quadraticKernelFunc(OffsetVector.z - 1.0), quadraticKernelFunc(OffsetVector.z - 2.0) };
+
+        for (int z = 0; z < 4; z++)
+        {
+            for (int y = 0; y < 4; y++)
+            {
+                for (int x = 0; x < 4; x++)
+                {
+                    float Weight = WeightX[x] * WeightY[y] * WeightZ[z];
+                    voParticlesScalarValue_transferCCSField2Particles[DataSpan_transferCCSField2Particles * CurParticleLinearIndex + DataOffset_transferCCSField2Particles] += Weight * vScalarFieldGridData_transferCCSField2Particles[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x - 1, y - 1, z - 1))];
+                }
+            }
+        }
+    }
+    else if (TransferAlg_transferCCSField2Particles == CUBIC)
+    {
+        float WeightX[4] = { cubicKernelFunc(OffsetVector.x + 1.0), cubicKernelFunc(OffsetVector.x), cubicKernelFunc(OffsetVector.x - 1.0), cubicKernelFunc(OffsetVector.x - 2.0) };
+        float WeightY[4] = { cubicKernelFunc(OffsetVector.y + 1.0), cubicKernelFunc(OffsetVector.y), cubicKernelFunc(OffsetVector.y - 1.0), cubicKernelFunc(OffsetVector.y - 2.0) };
+        float WeightZ[4] = { cubicKernelFunc(OffsetVector.z + 1.0), cubicKernelFunc(OffsetVector.z), cubicKernelFunc(OffsetVector.z - 1.0), cubicKernelFunc(OffsetVector.z - 2.0) };
+
+        for (int z = 0; z < 4; z++)
+        {
+            for (int y = 0; y < 4; y++)
+            {
+                for (int x = 0; x < 4; x++)
+                {
+                    float Weight = WeightX[x] * WeightY[y] * WeightZ[z];
+                    voParticlesScalarValue_transferCCSField2Particles[DataSpan_transferCCSField2Particles * CurParticleLinearIndex + DataOffset_transferCCSField2Particles] += Weight * vScalarFieldGridData_transferCCSField2Particles[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x - 1, y - 1, z - 1))];
+                }
+            }
+        }
+    }
+    else
+    {
+        
+    }
+}
+
+StructuredBuffer<float> vParticlesPos_transferParticles2CCSField;
+StructuredBuffer<int> vParticlesScalarValue_transferParticles2CCSField;
+RWStructuredBuffer<int> voScalarFieldData_transferParticles2CCSField;
+RWStructuredBuffer<int> voWeightFieldData_transferParticles2CCSField;
+int DataSpan_transferParticles2CCSField = 1;
+int DataOffset_transferParticles2CCSField = 0;
+int TransferAlg_transferParticles2CCSField = 0;
+[numthreads(NUMTHREADS, 1, 1)]
+void transferParticles2CCSField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+	if (CurLinearIndex >= ParticlesNum[0])
+		return;
+    
+    float3 CurParticlesPos = float3(vParticlesPos_transferParticles2CCSField[3 * CurLinearIndex], vParticlesPos_transferParticles2CCSField[3 * CurLinearIndex + 1], vParticlesPos_transferParticles2CCSField[3 * CurLinearIndex + 2]);
+	float3 RelPos = (CurParticlesPos - GridOrigin - GridSpacing * 0.5);
+	float3 RelPosIndex = RelPos / GridSpacing;
+	int3 DownBackLeftGridCoord = int3(floor(RelPosIndex.x), floor(RelPosIndex.y), floor(RelPosIndex.z));
+	float3 OffsetVector = (RelPos - float3((float)(DownBackLeftGridCoord.x) * GridSpacing.x, (float)(DownBackLeftGridCoord.y) * GridSpacing.y, (float)(DownBackLeftGridCoord.z) * GridSpacing.z)) / GridSpacing;
+
+    if (TransferAlg_transferParticles2CCSField == LINEAR)
+    {
+        float WeightX[2] = { linearKernelFunc(OffsetVector.x), linearKernelFunc(OffsetVector.x - 1.0) };
+        float WeightY[2] = { linearKernelFunc(OffsetVector.y), linearKernelFunc(OffsetVector.y - 1.0) };
+        float WeightZ[2] = { linearKernelFunc(OffsetVector.z), linearKernelFunc(OffsetVector.z - 1.0) };
+
+        for (int z = 0; z < 2; z++)
+        {
+            for (int y = 0; y < 2; y++)
+            {
+                for (int x = 0; x < 2; x++)
+                {
+                    float Weight = WeightX[x] * WeightY[y] * WeightZ[z];
+                    InterlockedAdd
+				(
+					voScalarFieldData_transferParticles2CCSField[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x, y, z))],
+					(int) (Weight * (float) vParticlesScalarValue_transferParticles2CCSField[DataSpan_transferParticles2CCSField * CurLinearIndex + DataOffset_transferParticles2CCSField])
+				);
+                    InterlockedAdd
+				(
+					voWeightFieldData_transferParticles2CCSField[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x, y, z))],
+					(int) (Weight * ATMOICCOFF)
+				);
+                }
+            }
+        }
+    }
+    else if (TransferAlg_transferParticles2CCSField == QUADRATIC)
+    {
+        float WeightX[4] = { quadraticKernelFunc(OffsetVector.x + 1.0), quadraticKernelFunc(OffsetVector.x), quadraticKernelFunc(OffsetVector.x - 1.0), quadraticKernelFunc(OffsetVector.x - 2.0) };
+        float WeightY[4] = { quadraticKernelFunc(OffsetVector.y + 1.0), quadraticKernelFunc(OffsetVector.y), quadraticKernelFunc(OffsetVector.y - 1.0), quadraticKernelFunc(OffsetVector.y - 2.0) };
+        float WeightZ[4] = { quadraticKernelFunc(OffsetVector.z + 1.0), quadraticKernelFunc(OffsetVector.z), quadraticKernelFunc(OffsetVector.z - 1.0), quadraticKernelFunc(OffsetVector.z - 2.0) };
+
+        for (int z = 0; z < 4; z++)
+        {
+            for (int y = 0; y < 4; y++)
+            {
+                for (int x = 0; x < 4; x++)
+                {
+                    float Weight = WeightX[x] * WeightY[y] * WeightZ[z];
+                    InterlockedAdd
+					(
+                    voScalarFieldData_transferParticles2CCSField[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x - 1, y - 1, z - 1))],
+					(int) (Weight * (float) vParticlesScalarValue_transferParticles2CCSField[DataSpan_transferParticles2CCSField * CurLinearIndex + DataOffset_transferParticles2CCSField])
+					);
+                    InterlockedAdd
+					(
+					voWeightFieldData_transferParticles2CCSField[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x - 1, y - 1, z - 1))],
+					(int) (Weight * ATMOICCOFF)
+					);
+                }
+            }
+        }
+    }
+    else if (TransferAlg_transferParticles2CCSField == CUBIC)
+    {
+        float WeightX[4] = { cubicKernelFunc(OffsetVector.x + 1.0), cubicKernelFunc(OffsetVector.x), cubicKernelFunc(OffsetVector.x - 1.0), cubicKernelFunc(OffsetVector.x - 2.0) };
+        float WeightY[4] = { cubicKernelFunc(OffsetVector.y + 1.0), cubicKernelFunc(OffsetVector.y), cubicKernelFunc(OffsetVector.y - 1.0), cubicKernelFunc(OffsetVector.y - 2.0) };
+        float WeightZ[4] = { cubicKernelFunc(OffsetVector.z + 1.0), cubicKernelFunc(OffsetVector.z), cubicKernelFunc(OffsetVector.z - 1.0), cubicKernelFunc(OffsetVector.z - 2.0) };
+        
+        for (int z = 0; z < 4; z++)
+        {
+            for (int y = 0; y < 4; y++)
+            {
+                for (int x = 0; x < 4; x++)
+                {
+                    float Weight = WeightX[x] * WeightY[y] * WeightZ[z];
+                    InterlockedAdd
+					(
+                    voScalarFieldData_transferParticles2CCSField[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x - 1, y - 1, z - 1))],
+					(int) (Weight * (float) vParticlesScalarValue_transferParticles2CCSField[DataSpan_transferParticles2CCSField * CurLinearIndex + DataOffset_transferParticles2CCSField])
+					);
+                    InterlockedAdd
+					(
+					voWeightFieldData_transferParticles2CCSField[transCoordIndex2LinearWithOffset(DownBackLeftGridCoord, GridResolution, int3(x - 1, y - 1, z - 1))],
+					(int) (Weight * ATMOICCOFF)
+					);
+                }
+            }
+        }
+    }
+    else
+    {
+        
+    }
+}
+
+RWStructuredBuffer<float> vioScalarFieldData_normalizeCCSField;
+StructuredBuffer<float> vWeightFieldData_normalizeCCSField;
+[numthreads(NUMTHREADS, 1, 1)]
+void normalizeCCSField(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+	if (CurLinearIndex >= TotalThreadNum)
+		return;
+
+    if (vWeightFieldData_normalizeCCSField[CurLinearIndex] > 0.0)
+	{
+        vioScalarFieldData_normalizeCCSField[CurLinearIndex] /= vWeightFieldData_normalizeCCSField[CurLinearIndex];
+    }
+}
+
+float vDeltaT_advectParticles;
+float vCFLNumber_advectParticles;
+float vMinGridSpacing_advectParticles;
+float3 vGridResolutionX_advectParticles, vGridResolutionY_advectParticles, vGridResolutionZ_advectParticles;
+float3 vGridOriginX_advectParticles, vGridOriginY_advectParticles, vGridOriginZ_advectParticles;
+StructuredBuffer<float> vVelFieldDataX_advectParticles;
+StructuredBuffer<float> vVelFieldDataY_advectParticles;
+StructuredBuffer<float> vVelFieldDataZ_advectParticles;
+RWStructuredBuffer<float> vioParticlesPos_advectParticles;
+int AdvectionAcc_advectParticles = 0;
+float3 sampleParticleVel(float3 vCurParticlePos)
+{
+    float3 SampledRelPosX = vCurParticlePos - vGridOriginX_advectParticles - GridSpacing / 2;
+    float3 SampledRelPosY = vCurParticlePos - vGridOriginY_advectParticles - GridSpacing / 2;
+    float3 SampledRelPosZ = vCurParticlePos - vGridOriginZ_advectParticles - GridSpacing / 2;
+
+    float3 TempDownBackLeftIndexX = SampledRelPosX / GridSpacing;
+    float3 TempDownBackLeftIndexY = SampledRelPosY / GridSpacing;
+    float3 TempDownBackLeftIndexZ = SampledRelPosZ / GridSpacing;
+    
+    int3 DownBackLeftIndexX = (int3) floor(TempDownBackLeftIndexX);
+    int3 DownBackLeftIndexY = (int3) floor(TempDownBackLeftIndexY);
+    int3 DownBackLeftIndexZ = (int3) floor(TempDownBackLeftIndexZ);
+
+    float3 OffsetRatioX = (SampledRelPosX - (DownBackLeftIndexX * GridSpacing)) / GridSpacing;
+    float3 OffsetRatioY = (SampledRelPosY - (DownBackLeftIndexY * GridSpacing)) / GridSpacing;
+    float3 OffsetRatioZ = (SampledRelPosZ - (DownBackLeftIndexZ * GridSpacing)) / GridSpacing;
+
+    float3 UpBackLeft = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(0, 1, 0))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(0, 1, 0))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(0, 1, 0))]
+    );
+    float3 UpBackRight = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(1, 1, 0))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(1, 1, 0))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(1, 1, 0))]
+    );
+    float3 UpFrontLeft = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(0, 1, 1))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(0, 1, 1))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(0, 1, 1))]
+    );
+    float3 UpFrontRight = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(1, 1, 1))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(1, 1, 1))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(1, 1, 1))]
+    );
+    float3 DownBackLeft = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(0, 0, 0))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(0, 0, 0))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(0, 0, 0))]
+    );
+    float3 DownBackRight = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(1, 0, 0))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(1, 0, 0))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(1, 0, 0))]
+    );
+    float3 DownFrontLeft = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(0, 0, 1))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(0, 0, 1))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(0, 0, 1))]
+    );
+    float3 DownFrontRight = float3(
+        vVelFieldDataX_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexX, vGridResolutionX_advectParticles, int3(1, 0, 1))],
+        vVelFieldDataY_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexY, vGridResolutionY_advectParticles, int3(1, 0, 1))],
+        vVelFieldDataZ_advectParticles[transCoordIndex2LinearWithOffset(DownBackLeftIndexZ, vGridResolutionZ_advectParticles, int3(1, 0, 1))]
+    );
+    
+    float3 Result = float3(0, 0, 0);
+    
+    Result.x =
+		DownBackLeft.x * (1 - OffsetRatioX.x) * (1 - OffsetRatioX.y) * (1 - OffsetRatioX.z) +
+		DownBackRight.x * OffsetRatioX.x * (1 - OffsetRatioX.y) * (1 - OffsetRatioX.z) +
+		UpBackLeft.x * (1 - OffsetRatioX.x) * OffsetRatioX.y * (1 - OffsetRatioX.z) +
+		UpBackRight.x * OffsetRatioX.x * OffsetRatioX.y * (1 - OffsetRatioX.z) +
+		DownFrontLeft.x * (1 - OffsetRatioX.x) * (1 - OffsetRatioX.y) * OffsetRatioX.z +
+		DownFrontRight.x * OffsetRatioX.x * (1 - OffsetRatioX.y) * OffsetRatioX.z +
+		UpFrontLeft.x * (1 - OffsetRatioX.x) * OffsetRatioX.y * OffsetRatioX.z +
+		UpFrontRight.x * OffsetRatioX.x * OffsetRatioX.y * OffsetRatioX.z;
+    
+    Result.y =
+		DownBackLeft.y * (1 - OffsetRatioY.x) * (1 - OffsetRatioY.y) * (1 - OffsetRatioY.z) +
+		DownBackRight.y * OffsetRatioY.x * (1 - OffsetRatioY.y) * (1 - OffsetRatioY.z) +
+		UpBackLeft.y * (1 - OffsetRatioY.x) * OffsetRatioY.y * (1 - OffsetRatioY.z) +
+		UpBackRight.y * OffsetRatioY.x * OffsetRatioY.y * (1 - OffsetRatioY.z) +
+		DownFrontLeft.y * (1 - OffsetRatioY.x) * (1 - OffsetRatioY.y) * OffsetRatioY.z +
+		DownFrontRight.y * OffsetRatioY.x * (1 - OffsetRatioY.y) * OffsetRatioY.z +
+		UpFrontLeft.y * (1 - OffsetRatioY.x) * OffsetRatioY.y * OffsetRatioY.z +
+		UpFrontRight.y * OffsetRatioY.x * OffsetRatioY.y * OffsetRatioY.z;
+    
+    Result.z =
+		DownBackLeft.z * (1 - OffsetRatioZ.x) * (1 - OffsetRatioZ.y) * (1 - OffsetRatioZ.z) +
+		DownBackRight.z * OffsetRatioZ.x * (1 - OffsetRatioZ.y) * (1 - OffsetRatioZ.z) +
+		UpBackLeft.z * (1 - OffsetRatioZ.x) * OffsetRatioZ.y * (1 - OffsetRatioZ.z) +
+		UpBackRight.z * OffsetRatioZ.x * OffsetRatioZ.y * (1 - OffsetRatioZ.z) +
+		DownFrontLeft.z * (1 - OffsetRatioZ.x) * (1 - OffsetRatioZ.y) * OffsetRatioZ.z +
+		DownFrontRight.z * OffsetRatioZ.x * (1 - OffsetRatioZ.y) * OffsetRatioZ.z +
+		UpFrontLeft.z * (1 - OffsetRatioZ.x) * OffsetRatioZ.y * OffsetRatioZ.z +
+		UpFrontRight.z * OffsetRatioZ.x * OffsetRatioZ.y * OffsetRatioZ.z;
+    
+    return Result;
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void advectParticles(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= ParticlesNum[0])
+        return;
+    
+    float SubStepTime = 0.0f;
+    bool IsFinishedAdvection = false;
+
+    float3 CurParticlePos = float3(vioParticlesPos_advectParticles[3 * CurLinearIndex], vioParticlesPos_advectParticles[3 * CurLinearIndex + 1], vioParticlesPos_advectParticles[3 * CurLinearIndex + 2]);
+    float3 CurParticleVel;
+    float3 CurParticleMidPos;
+    float3 CurParticleMidVel;
+    float3 CurParticleThreeFourthsPos;
+    float3 CurParticleThreeFourthsVel;
+
+    while (!IsFinishedAdvection)
+    {
+        float DeltaSubStepTime = 0.0f;
+        
+        CurParticleVel = sampleParticleVel(CurParticlePos);
+
+        float AbsMaxVelComponent = max(max(abs(CurParticleVel.x), abs(CurParticleVel.y)), abs(CurParticleVel.z));
+        if (AbsMaxVelComponent != 0.0f)
+        {
+            DeltaSubStepTime = vCFLNumber_advectParticles * vMinGridSpacing_advectParticles / AbsMaxVelComponent;
+        }
+        else
+        {
+            DeltaSubStepTime = vDeltaT_advectParticles;
+        }
+        
+        if (SubStepTime + DeltaSubStepTime >= vDeltaT_advectParticles)
+        {
+            DeltaSubStepTime = vDeltaT_advectParticles - SubStepTime;
+            IsFinishedAdvection = true;
+        }
+        else if (SubStepTime + 2.0f * DeltaSubStepTime >= vDeltaT_advectParticles)
+        {
+            DeltaSubStepTime = 0.5f * (vDeltaT_advectParticles - SubStepTime);
+        }
+        
+        if (AdvectionAcc_advectParticles == RK1)
+        {
+            CurParticlePos += DeltaSubStepTime * CurParticleVel;
+        }
+        else if (AdvectionAcc_advectParticles == RK2)
+        {
+            float HalfDeltaSubStepTime = 0.5f * DeltaSubStepTime;
+        
+            CurParticleMidPos = CurParticlePos + HalfDeltaSubStepTime * CurParticleVel;
+        
+            CurParticlePos += DeltaSubStepTime * sampleParticleVel(CurParticleMidPos);
+        }
+        else if (AdvectionAcc_advectParticles == RK3)
+        {
+            float HalfDeltaSubStepTime = 0.5f * DeltaSubStepTime;
+            float ThreeFourthsDeltaSubStepTime = 0.75f * DeltaSubStepTime;
+            float TwoNinthsDeltaSubStepTime = 2.0f / 9.0f * DeltaSubStepTime;
+            float ThreeNinthsDeltaSubStepTime = 3.0f / 9.0f * DeltaSubStepTime;
+            float FourNinthsDeltaSubStepTime = 4.0f / 9.0f * DeltaSubStepTime;
+            
+            CurParticleMidPos = CurParticlePos + HalfDeltaSubStepTime * CurParticleVel;
+            CurParticleMidVel = sampleParticleVel(CurParticleMidPos);
+            
+            CurParticleThreeFourthsPos = CurParticlePos + ThreeFourthsDeltaSubStepTime * CurParticleMidVel;
+            CurParticleThreeFourthsVel = sampleParticleVel(CurParticleThreeFourthsPos);
+            
+            CurParticlePos += TwoNinthsDeltaSubStepTime * CurParticleVel + ThreeNinthsDeltaSubStepTime * CurParticleMidVel + FourNinthsDeltaSubStepTime * CurParticleThreeFourthsVel;
+        }
+        else
+        {
+            
+        }
+            
+        SubStepTime += DeltaSubStepTime;
+    }
+    
+    vioParticlesPos_advectParticles[3 * CurLinearIndex] = CurParticlePos.x;
+    vioParticlesPos_advectParticles[3 * CurLinearIndex + 1] = CurParticlePos.y;
+    vioParticlesPos_advectParticles[3 * CurLinearIndex + 2] = CurParticlePos.z;
+}
+
+StructuredBuffer<float> vParticlesPos_buildFluidDomain;
+RWStructuredBuffer<float> vFluidDomainFieldData_buildFluidDomain;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidDomain(uint3 id : SV_DispatchThreadID)
+{
+    int CurParticleLinearIndex = (int) id.x;
+
+    if (CurParticleLinearIndex >= ParticlesNum[0])
+        return;
+
+    float3 CurParticlesPos = float3(vParticlesPos_buildFluidDomain[3 * CurParticleLinearIndex], vParticlesPos_buildFluidDomain[3 * CurParticleLinearIndex + 1], vParticlesPos_buildFluidDomain[3 * CurParticleLinearIndex + 2]);
+    int3 CorrespondGridIndex = transPos2CoordIndex(CurParticlesPos, GridResolution, GridOrigin, GridSpacing);
+    int CorrespondGridLinearIndex = transCoordIndex2LinearWithOffset(CorrespondGridIndex, GridResolution, int3(0, 0, 0));
+    vFluidDomainFieldData_buildFluidDomain[CorrespondGridLinearIndex] = -FluidDomainValue;
+}
+
+StructuredBuffer<float> vParticlesPos_statisticalFluidDensity;
+RWStructuredBuffer<int> voParticlesDensity_statisticalFluidDensity;
+[numthreads(NUMTHREADS, 1, 1)]
+void statisticalFluidDensity(uint3 id : SV_DispatchThreadID)
+{
+    int CurParticleLinearIndex = (int) id.x;
+
+    if (CurParticleLinearIndex >= ParticlesNum[0])
+        return;
+
+    float3 CurParticlesPos = float3(vParticlesPos_statisticalFluidDensity[3 * CurParticleLinearIndex], vParticlesPos_statisticalFluidDensity[3 * CurParticleLinearIndex + 1], vParticlesPos_statisticalFluidDensity[3 * CurParticleLinearIndex + 2]);
+    int3 CorrespondGridCoord = transPos2CoordIndex(CurParticlesPos, GridResolution, GridOrigin, GridSpacing);
+    int CorrespondGridLinearIndex = transCoordIndex2LinearWithOffset(CorrespondGridCoord, GridResolution, int3(0, 0, 0));
+    InterlockedAdd(voParticlesDensity_statisticalFluidDensity[CorrespondGridLinearIndex], 1);
+}
+
+StructuredBuffer<float> vSolidSDFData_buildFluidMarkers;
+RWStructuredBuffer<int> voMarkersFieldData_buildFluidMarkers;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidMarkers(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    if (isInsideSDF(vSolidSDFData_buildFluidMarkers[CurLinearIndex]))//solid
+    {
+        voMarkersFieldData_buildFluidMarkers[CurLinearIndex] = 2;
+    }
+    else if (voMarkersFieldData_buildFluidMarkers[CurLinearIndex] > 0)//fluid
+    {
+        voMarkersFieldData_buildFluidMarkers[CurLinearIndex] = 1;
+    }
+    else //air
+    {
+        voMarkersFieldData_buildFluidMarkers[CurLinearIndex] = 0;
+    }
+}
+
+float3 vBoxMin_buildFluidMarkersWithEmitBox, vBoxMax_buildFluidMarkersWithEmitBox;
+StructuredBuffer<float> vSolidSDFData_buildFluidMarkersWithEmitBox;
+RWStructuredBuffer<int> voMarkersFieldData_buildFluidMarkersWithEmitBox;
+[numthreads(NUMTHREADS, 1, 1)]
+void buildFluidMarkersWithEmitBox(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurCellMin = GridOrigin + GridSpacing * CurCoordIndex;
+    float3 CurCellMax = CurCellMin + GridSpacing;
+    
+    if (isInsideSDF(vSolidSDFData_buildFluidMarkersWithEmitBox[CurLinearIndex]))//solid
+    {
+        voMarkersFieldData_buildFluidMarkersWithEmitBox[CurLinearIndex] = 2;
+    }
+    //TODO
+    else if (CurCellMin.x < vBoxMax_buildFluidMarkersWithEmitBox.x && CurCellMax.x > vBoxMin_buildFluidMarkersWithEmitBox.x &&
+        CurCellMin.y < vBoxMax_buildFluidMarkersWithEmitBox.y && CurCellMax.y > vBoxMin_buildFluidMarkersWithEmitBox.y &&
+        CurCellMin.z < vBoxMax_buildFluidMarkersWithEmitBox.z && CurCellMax.z > vBoxMin_buildFluidMarkersWithEmitBox.z) //emit box
+    {
+        voMarkersFieldData_buildFluidMarkersWithEmitBox[CurLinearIndex] = 2;
+    }
+    else if (voMarkersFieldData_buildFluidMarkersWithEmitBox[CurLinearIndex] > 0)//fluid
+    {
+        voMarkersFieldData_buildFluidMarkersWithEmitBox[CurLinearIndex] = 1;
+    }
+    else //air
+    {
+        voMarkersFieldData_buildFluidMarkersWithEmitBox[CurLinearIndex] = 0;
+    }
+}

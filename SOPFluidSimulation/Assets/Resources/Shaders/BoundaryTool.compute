@@ -1,0 +1,122 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel sampleTexture3DWithTransform
+#pragma kernel buildTotalBoundarysSDF
+#pragma kernel buildSolidsVel
+
+float3 vTextureMin;
+float3 vTextureSize;
+Texture3D<float> vTexture3D;
+SamplerState sampler_vTexture3D;
+float3 vTranslation;
+float3 vRotation;
+float3 vScale;
+RWStructuredBuffer<float> voFieldData;
+
+int vCurSolidIndex;
+StructuredBuffer<float> vSolidSDFFieldData;
+RWStructuredBuffer<float> voSolidsMarkerFieldData;
+
+int vTotalSolidNum;
+StructuredBuffer<float> vSolidsVel;
+StructuredBuffer<float> vSolidsMarkerFieldData;
+RWStructuredBuffer<float> voSolidsVelFieldDataX;
+RWStructuredBuffer<float> voSolidsVelFieldDataY;
+RWStructuredBuffer<float> voSolidsVelFieldDataZ;
+
+[numthreads(NUMTHREADS, 1, 1)]
+void sampleTexture3DWithTransform(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+    
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurCellPos = GridOrigin + 0.5 * GridSpacing + float3(GridSpacing.x * CurCoordIndex.x, GridSpacing.y * CurCoordIndex.y, GridSpacing.z * CurCoordIndex.z);
+    
+    float3 DstPos = CurCellPos - vTranslation;
+    
+    float3 CurUVCoord = (DstPos - vTextureMin) / vTextureSize;
+    voFieldData[CurLinearIndex] = vTexture3D.SampleLevel(sampler_vTexture3D, CurUVCoord, 0);
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildTotalBoundarysSDF(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    if (vCurSolidIndex == 1)
+    {
+        voSolidsMarkerFieldData[CurLinearIndex] = UNKNOWN;
+    }
+
+    if (isInsideSDF(vSolidSDFFieldData[CurLinearIndex]) && voSolidsMarkerFieldData[CurLinearIndex] == UNKNOWN)
+    {
+        voSolidsMarkerFieldData[CurLinearIndex] = -vCurSolidIndex;
+    }
+}
+
+[numthreads(NUMTHREADS, 1, 1)]
+void buildSolidsVel(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 GridResolutionX = GridResolution + int3(1, 0, 0);
+    int3 GridResolutionY = GridResolution + int3(0, 1, 0);
+    int3 GridResolutionZ = GridResolution + int3(0, 0, 1);
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+
+    int ULeftLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, float3(0, 0, 0));
+    int URightLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionX, float3(1, 0, 0));
+    int VDownLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, float3(0, 0, 0));
+    int VUpLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionY, float3(0, 1, 0));
+    int WBackLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, float3(0, 0, 0));
+    int WFrontLinearIndex = transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolutionZ, float3(0, 0, 1));
+
+    int CurSolidIndex = -(1 + vSolidsMarkerFieldData[CurLinearIndex]);
+    float3 CurSolidVel;
+    
+    if (CurSolidIndex < vTotalSolidNum)
+        CurSolidVel = float3(vSolidsVel[3 * CurSolidIndex], vSolidsVel[3 * CurSolidIndex + 1], vSolidsVel[3 * CurSolidIndex + 2]);
+    else
+        CurSolidVel = float3(0.0f, 0.0f, 0.0f);
+    
+    if (vSolidsMarkerFieldData[CurLinearIndex] < 0)
+    {
+        voSolidsVelFieldDataX[ULeftLinearIndex] = vSolidsVel[3 * CurSolidIndex];
+        voSolidsVelFieldDataX[URightLinearIndex] = vSolidsVel[3 * CurSolidIndex];
+        voSolidsVelFieldDataY[VDownLinearIndex] = vSolidsVel[3 * CurSolidIndex + 1];
+        voSolidsVelFieldDataY[VUpLinearIndex] = vSolidsVel[3 * CurSolidIndex + 1];
+        voSolidsVelFieldDataZ[WBackLinearIndex] = vSolidsVel[3 * CurSolidIndex + 2];
+        voSolidsVelFieldDataZ[WFrontLinearIndex] = vSolidsVel[3 * CurSolidIndex + 2];
+    }
+    else
+    {
+        if (vSolidsMarkerFieldData[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, float3(-1, 0, 0))] >= 0)
+            voSolidsVelFieldDataX[ULeftLinearIndex] = vSolidsVel[3 * CurSolidIndex];
+
+        if (vSolidsMarkerFieldData[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, float3(1, 0, 0))] >= 0)
+            voSolidsVelFieldDataX[URightLinearIndex] = vSolidsVel[3 * CurSolidIndex];
+        
+        if (vSolidsMarkerFieldData[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, float3(0, -1, 0))] >= 0)
+            voSolidsVelFieldDataY[VDownLinearIndex] = vSolidsVel[3 * CurSolidIndex + 1];
+        
+        if (vSolidsMarkerFieldData[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, float3(0, 1, 0))] >= 0)
+            voSolidsVelFieldDataY[VUpLinearIndex] = vSolidsVel[3 * CurSolidIndex + 1];
+        
+        if (vSolidsMarkerFieldData[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, float3(0, 0, -1))] >= 0)
+            voSolidsVelFieldDataZ[WBackLinearIndex] = vSolidsVel[3 * CurSolidIndex + 2];
+        
+        if (vSolidsMarkerFieldData[transCoordIndex2LinearWithOffset(CurCoordIndex, GridResolution, float3(0, 0, 1))] >= 0)
+            voSolidsVelFieldDataZ[WFrontLinearIndex] = vSolidsVel[3 * CurSolidIndex + 2];
+    }
+}

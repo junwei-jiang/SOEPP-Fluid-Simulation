@@ -1,0 +1,237 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel copy
+#pragma kernel scale
+#pragma kernel plus
+#pragma kernel plusAlphaX
+#pragma kernel sum
+#pragma kernel dot
+#pragma kernel getMaxValue
+#pragma kernel getMinValue
+#pragma kernel getAbsMaxValue
+#pragma kernel detectInvalidValue
+#pragma kernel transferFloats2Ints
+#pragma kernel transferInts2Floats
+
+groupshared float sharedMem[MAXNUMTHREADS];
+
+StructuredBuffer<float> vVector_Copy;
+RWStructuredBuffer<float> voVector_Copy;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void copy(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;  
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    voVector_Copy[CurLinearIndex] = vVector_Copy[CurLinearIndex];
+}
+
+float vScaleCoefficient_Scale = 1.0;
+RWStructuredBuffer<float> vioVector_Scale;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void scale(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    vioVector_Scale[CurLinearIndex] *= vScaleCoefficient_Scale;
+}
+
+float vScalarValue_Plus = 0.0;
+RWStructuredBuffer<float> vioVector_Plus;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void plus(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    vioVector_Plus[CurLinearIndex] += vScalarValue_Plus;
+}
+
+float vAlpha_PlusAlphaX = 1.0;
+StructuredBuffer<float> vOther_PlusAlphaX;
+RWStructuredBuffer<float> vioVector_PlusAlphaX;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void plusAlphaX (uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+	if (CurLinearIndex >= TotalThreadNum)
+		return;
+    
+    vioVector_PlusAlphaX[CurLinearIndex] += vOther_PlusAlphaX[CurLinearIndex] * vAlpha_PlusAlphaX;
+}
+
+StructuredBuffer<float> vVector_Sum;
+RWStructuredBuffer<float> voVector_Sum;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void sum(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x >= TotalThreadNum)
+    {
+        sharedMem[GI] = 0;
+    }
+    else
+    {
+        sharedMem[GI] = vVector_Sum[DTid.x]; // store in shared memory   
+    }
+    
+    GroupMemoryBarrierWithGroupSync(); // wait until everything is transfered from device memory to shared memory
+
+    for (uint s = MAXNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+            sharedMem[GI] += sharedMem[GI + s];
+        GroupMemoryBarrierWithGroupSync();
+    }
+	// Have the first thread write out to the output
+    if (GI == 0)
+    {
+		// write out the result for each thread group
+        voVector_Sum[Gid.x] = sharedMem[0];
+    }
+}
+
+StructuredBuffer<float> vVectorA_Dot;
+StructuredBuffer<float> vVectorB_Dot;
+RWStructuredBuffer<float> voVector_Dot;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void dot(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+
+    voVector_Dot[CurLinearIndex] = vVectorA_Dot[CurLinearIndex] * vVectorB_Dot[CurLinearIndex];
+}
+
+StructuredBuffer<float> vVector_GetMaxValue;
+RWStructuredBuffer<float> voVector_GetMaxValue;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void getMaxValue(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x >= TotalThreadNum)
+    {
+        sharedMem[GI] = FLT_MIN;
+    }
+    else
+    {
+        sharedMem[GI] = vVector_GetMaxValue[DTid.x]; // store in shared memory   
+    }
+    
+    GroupMemoryBarrierWithGroupSync(); // wait until everything is transfered from device memory to shared memory
+
+    for (uint s = MAXNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+            sharedMem[GI] = max(sharedMem[GI], sharedMem[GI + s]);
+        GroupMemoryBarrierWithGroupSync();
+    }
+	// Have the first thread write out to the output
+    if (GI == 0)
+    {
+		// write out the result for each thread group
+        voVector_GetMaxValue[Gid.x] = sharedMem[0];
+    }
+}
+
+StructuredBuffer<float> vVector_GetMinValue;
+RWStructuredBuffer<float> voVector_GetMinValue;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void getMinValue(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x >= TotalThreadNum)
+    {
+        sharedMem[GI] = FLT_MAX;
+    }
+    else
+    {
+        sharedMem[GI] = vVector_GetMinValue[DTid.x]; // store in shared memory   
+    }
+    
+    GroupMemoryBarrierWithGroupSync(); // wait until everything is transfered from device memory to shared memory
+
+    for (uint s = MAXNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+            sharedMem[GI] = min(sharedMem[GI], sharedMem[GI + s]);
+        GroupMemoryBarrierWithGroupSync();
+    }
+	// Have the first thread write out to the output
+    if (GI == 0)
+    {
+		// write out the result for each thread group
+        voVector_GetMinValue[Gid.x] = sharedMem[0];
+    }
+}
+
+StructuredBuffer<float> vVector_GetAbsMaxValue;
+RWStructuredBuffer<float> voVector_GetAbsMaxValue;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void getAbsMaxValue(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x >= TotalThreadNum)
+    {
+        sharedMem[GI] = 0;
+    }
+    else
+    {
+        sharedMem[GI] = abs(vVector_GetAbsMaxValue[DTid.x]); // store in shared memory   
+    }
+    
+    GroupMemoryBarrierWithGroupSync(); // wait until everything is transfered from device memory to shared memory
+
+    for (uint s = MAXNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+            sharedMem[GI] = max(sharedMem[GI], sharedMem[GI + s]);
+        GroupMemoryBarrierWithGroupSync();
+    }
+	// Have the first thread write out to the output
+    if (GI == 0)
+    {
+		// write out the result for each thread group
+        voVector_GetAbsMaxValue[Gid.x] = sharedMem[0];
+    }
+}
+
+StructuredBuffer<float> vVector_DetectInvalidValue;
+RWStructuredBuffer<float> voVector_DetectInvalidValue;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void detectInvalidValue(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    if (isnan(vVector_DetectInvalidValue[CurLinearIndex]))
+    {
+        voVector_DetectInvalidValue[0] = 1;
+    }
+}
+
+StructuredBuffer<float> vFloats_TransferFloats2Ints;
+RWStructuredBuffer<int> voInts_TransferFloats2Ints;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void transferFloats2Ints(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+     
+    voInts_TransferFloats2Ints[CurLinearIndex] = (int) (vFloats_TransferFloats2Ints[CurLinearIndex] * ATMOICCOFF);
+}
+
+StructuredBuffer<int> vInts_TransferInts2Floats;
+RWStructuredBuffer<float> voFloats_TransferInts2Floats;
+[numthreads(MAXNUMTHREADS, 1, 1)]
+void transferInts2Floats(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = id.x;
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+     
+    voFloats_TransferInts2Floats[CurLinearIndex] = (float) vInts_TransferInts2Floats[CurLinearIndex] * MINATOMICCOFF;
+}

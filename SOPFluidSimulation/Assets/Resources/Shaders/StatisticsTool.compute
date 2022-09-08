@@ -1,0 +1,97 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel computeFluxFromGrid
+
+#define TEMPNUMTHREADS 1024
+
+uniform RWStructuredBuffer<float> STTempResult;
+uniform RWStructuredBuffer<int> STGroupCounter;
+
+groupshared float sharedMem[TEMPNUMTHREADS];
+
+int vTotalGroupsNum;
+int vNormalDirection;
+int vAxialCoord;
+int2 vPlanarCoordMin, vPlanarCoordMax;
+StructuredBuffer<float> vVelFieldData;
+StructuredBuffer<float> vFluidDomainFieldData;
+RWStructuredBuffer<float> voFlux;
+
+[numthreads(TEMPNUMTHREADS, 1, 1)]
+void computeFluxFromGrid(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+    if (DTid.x < TotalThreadNum)
+    {
+        int3 VelFieldResolution = GridResolution;
+        int3 PlaneResolution = int3(1, 1, 1);
+        int3 CurFaceCoord = int3(0, 0, 0);
+        int3 CellOffset = int3(0, 0, 0);
+        int CurFaceLinearIndex = 0;
+        float FaceArea = 0.0f;
+        
+        if (vNormalDirection == 0)
+        {
+            VelFieldResolution += int3(1, 0, 0);
+            PlaneResolution.y = vPlanarCoordMax.x - vPlanarCoordMin.x;
+            PlaneResolution.z = vPlanarCoordMax.y - vPlanarCoordMin.y;
+            CurFaceCoord = int3(vAxialCoord, vPlanarCoordMin.x, vPlanarCoordMin.y);
+            CellOffset.x = -1;
+            FaceArea = GridSpacing.y * GridSpacing.z;
+        }
+        else if (vNormalDirection == 1)
+        {
+            VelFieldResolution += int3(0, 1, 0);
+            PlaneResolution.z = vPlanarCoordMax.x - vPlanarCoordMin.x;
+            PlaneResolution.x = vPlanarCoordMax.y - vPlanarCoordMin.y;
+            CurFaceCoord = int3(vPlanarCoordMin.y, vAxialCoord, vPlanarCoordMin.x);
+            CellOffset.y = -1;
+            FaceArea = GridSpacing.z * GridSpacing.x;
+        }
+        else if (vNormalDirection == 2)
+        {
+            VelFieldResolution += int3(0, 0, 1);
+            PlaneResolution.x = vPlanarCoordMax.x - vPlanarCoordMin.x;
+            PlaneResolution.y = vPlanarCoordMax.y - vPlanarCoordMin.y;
+            CurFaceCoord = int3(vPlanarCoordMin.x, vPlanarCoordMin.y, vAxialCoord);
+            CellOffset.z = -1;
+            FaceArea = GridSpacing.x * GridSpacing.y;
+        }
+        
+        CurFaceCoord += transLinearIndex2Coord(DTid.x, PlaneResolution);
+        CurFaceLinearIndex = transCoordIndex2LinearWithOffset(CurFaceCoord, VelFieldResolution, int3(0, 0, 0));
+        
+        int CellLinearIndex1 = transCoordIndex2LinearWithOffset(CurFaceCoord, GridResolution, int3(0, 0, 0));
+        int CellLinearIndex2 = transCoordIndex2LinearWithOffset(CurFaceCoord, GridResolution, CellOffset);
+        float FluidDomainFraction = ((float) isInsideSDF(vFluidDomainFieldData[CellLinearIndex1]) + (float) isInsideSDF(vFluidDomainFieldData[CellLinearIndex2])) / 2;
+        sharedMem[GI] = FluidDomainFraction * VelFieldResolution[CurFaceLinearIndex] * FaceArea;
+    }
+    else
+    {
+        sharedMem[GI] = 0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    
+    for (uint s = TEMPNUMTHREADS / 2; s > 0; s >>= 1)
+    {
+        if (GI < s)
+        {
+            sharedMem[GI] += sharedMem[GI + s];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+        
+    if (GI == 0)
+    {
+        STTempResult[Gid.x] = sharedMem[0];
+        int FinishedGroupsNum;
+        InterlockedAdd(STGroupCounter[0], 1, FinishedGroupsNum);
+        if (FinishedGroupsNum == vTotalGroupsNum - 1)
+        {
+            voFlux[0] = 0;
+            for (int i = 0; i < vTotalGroupsNum; i++)
+            {
+                voFlux[0] += STTempResult[i];
+            }
+        }
+    }
+}

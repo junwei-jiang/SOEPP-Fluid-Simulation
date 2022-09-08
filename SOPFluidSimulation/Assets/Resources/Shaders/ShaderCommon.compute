@@ -1,0 +1,425 @@
+#ifndef SHADER_INCLUDE
+#define SHADER_INCLUDE
+
+#define FLT_MIN 1.175494351e-38F
+#define FLT_MAX 3.402823466e+38F
+#define FLT_EPSILON 1.19209290e-07F
+
+#define M_PI 3.1415926
+
+#define NUMTHREADS 512
+#define MAXNUMTHREADS 1024
+#define UNKNOWN FLT_MAX
+
+#define LINEAR 0
+#define CATMULLROM 1
+#define MONOCATMULLROM 2
+#define CUBICBRIDSON 3
+#define CLAMPCUBICBRIDSON 4
+
+#define LINEAR 0
+#define QUADRATIC 1
+#define CUBIC 2
+
+#define RK1 0
+#define RK2 1
+#define RK3 2
+
+//TODO: ?
+uniform float SimulationTime;
+
+uniform int3 GridResolution;
+uniform float3 GridOrigin;
+uniform float3 GridSpacing;
+
+uniform int TotalThreadNum;
+
+//TODO: delete
+uniform float3 Scale;
+uniform int CurrentDis;
+
+//TODO: delete
+uniform float FluidSurfaceDensity;
+
+uniform float FluidDomainValue = 100;
+uniform float ATMOICCOFF;
+uniform float MINATOMICCOFF;
+//TODO
+uniform int MaxParticlesNum = 256 * 256 * 256 * 8 / 2;
+
+uniform RWStructuredBuffer<int> ParticlesNum;
+
+inline bool isFloatEQ(float vValueA, float vValueB)
+{
+    return abs((vValueA - vValueB)) < FLT_EPSILON;
+}
+
+inline bool isFloatValid(float vValue)
+{
+    if ((abs(vValue) < FLT_MAX))
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+inline int floorCS(float vValue)
+{
+    if (vValue >= 0)
+    {
+        return ((int) (vValue));
+    }
+    else
+    {
+        return (((int) (vValue)) - 1);
+    }
+}
+
+inline float maxCS(float vValueA, float vValueB)
+{
+    if (vValueA > vValueB)
+    {
+        return vValueA;
+    }
+    else
+    {
+        return vValueB;
+    }
+}
+
+inline float minCS(float vValueA, float vValueB)
+{
+    if (vValueA < vValueB)
+    {
+        return vValueA;
+    }
+    else
+    {
+        return vValueB;
+    }
+}
+
+inline float clampCS(float vInputValue, float vValueA, float vValueB)
+{
+    float Max = maxCS(vValueA, vValueB);
+    float Min = minCS(vValueA, vValueB);
+
+    return maxCS(Min, minCS(vInputValue, Max));
+}
+
+inline bool isInsideSDF(float vSignedDistance)
+{
+    return vSignedDistance < 0;
+}
+
+inline int limit(int vIndex, int vRes)
+{
+    if (vIndex < 0)
+    {
+        return 0;
+    }
+    if (vIndex > vRes - 1)
+    {
+        return vRes - 1;
+    }
+    return vIndex;
+}
+
+inline float limit(float vIndex, float vRes)
+{
+    if (vIndex < 0)
+    {
+        return 0;
+    }
+    if (vIndex > vRes - 1)
+    {
+        return vRes - 1;
+    }
+    return vIndex;
+}
+
+inline int transCoordIndex2LinearWithOffset(int3 vIndex, int3 vRes, int3 vOffset)
+{
+    int IndexX = vIndex.x + vOffset.x;
+    int IndexY = vIndex.y + vOffset.y;
+    int IndexZ = vIndex.z + vOffset.z;
+    IndexX = limit(IndexX, vRes.x);
+    IndexY = limit(IndexY, vRes.y);
+    IndexZ = limit(IndexZ, vRes.z);
+
+    return (((IndexZ) * vRes.x * vRes.y) + ((IndexY) * vRes.x) + (IndexX));
+}
+
+inline int3 transLinearIndex2Coord(int vLinearIndex, int3 vRes)
+{
+    int IndexZ = vLinearIndex / (vRes.x * vRes.y);
+    int IndexY = (vLinearIndex - IndexZ * (vRes.x * vRes.y)) / vRes.x;
+    int IndexX = vLinearIndex % vRes.x;
+
+    IndexX = limit(IndexX, vRes.x);
+    IndexY = limit(IndexY, vRes.y);
+    IndexZ = limit(IndexZ, vRes.z);
+
+    return int3(IndexX, IndexY, IndexZ);
+}
+
+inline int3 transPos2CoordIndex(float3 vParticlesPos, int3 vGridResolution, float3 vGridOrigin, float3 vGridSpacing)
+{
+    float3 RelativePos = (vParticlesPos - vGridOrigin) / vGridSpacing;
+
+    return int3(limit((int) (RelativePos.x), vGridResolution.x), limit((int) (RelativePos.y), vGridResolution.y), limit((int) (RelativePos.z), vGridResolution.z));
+}
+
+inline bool isInsideAir(float vFluidSDF, float vSolidSDF)
+{
+    return ((vFluidSDF >= 0) && (vSolidSDF >= 0));
+}
+
+//TODO: ?
+inline float Random4DTo1D(float4 value, float a, float4 b)
+{
+    float4 smallValue = sin(value);
+    float random = dot(smallValue, b);
+    random = frac(sin(random) * a);
+    return random;
+}
+
+inline float3 Random4DTo3D(float4 value)
+{
+    return float3(
+        Random4DTo1D(value, 14375.5964, float4(15.637, 76.243, 37.168, 83.511)),
+        Random4DTo1D(value, 14684.6034, float4(45.366, 23.168, 65.918, 57.514)),
+        Random4DTo1D(value, 14985.1739, float4(62.654, 88.467, 25.111, 61.875))
+	);
+}
+
+inline float linearKernelFunc(float vOffset)
+{
+    if (abs(vOffset) < 1)
+    {
+        return 1.0 - abs(vOffset);
+    }
+    else
+    {
+        return 0.0;
+    }
+}
+
+inline float quadraticKernelFunc(float vOffset)
+{
+    if (abs(vOffset) < 0.5)
+    {
+        return 0.75 - abs(vOffset) * abs(vOffset);
+    }
+    else if (abs(vOffset) >= 0.5 && abs(vOffset) < 1.5)
+    {
+        return 0.5 * (1.5 - abs(vOffset)) * (1.5 - abs(vOffset));
+    }
+    else
+    {
+        return 0.0;
+    }
+}
+
+inline float cubicKernelFunc(float vOffset)
+{
+    if (abs(vOffset) < 1.0)
+    {
+        return 0.5 * abs(vOffset) * abs(vOffset) * abs(vOffset) - abs(vOffset) * abs(vOffset) + 2.0 / 3.0;
+    }
+    else if (abs(vOffset) >= 1.0 && abs(vOffset) < 2.0)
+    {
+        return 1.0 / 6.0 * (2.0 - abs(vOffset)) * (2.0 - abs(vOffset)) * (2.0 - abs(vOffset));
+    }
+    else
+    {
+        return 0.0;
+    }
+}
+
+inline float triLinearKernelFunc(float3 vOffset)
+{
+    return linearKernelFunc(vOffset.x) * linearKernelFunc(vOffset.y) * linearKernelFunc(vOffset.z);
+}
+
+inline float triQuadraticKernelFunc(float3 vOffset)
+{
+    return quadraticKernelFunc(vOffset.x) * quadraticKernelFunc(vOffset.y) * quadraticKernelFunc(vOffset.z);
+}
+
+inline float triCubicKernelFunc(float3 vOffset)
+{
+    return cubicKernelFunc(vOffset.x) * cubicKernelFunc(vOffset.y) * cubicKernelFunc(vOffset.z);
+}
+
+inline float cubicBridson(float vInput[4], float vT)
+{
+    return (-1.0 / 3.0 * vT + 1.0 / 2.0 * vT * vT - 1.0 / 6.0 * vT * vT * vT) * vInput[0] +
+		(1.0 - vT * vT + 1.0 / 2.0 * (vT * vT * vT - vT)) * vInput[1] +
+		(vT + 1.0 / 2.0 * (vT * vT - vT * vT * vT)) * vInput[2] +
+		(1.0 / 6.0 * (vT * vT * vT - vT)) * vInput[3];
+}
+
+inline float cubicBridson(float vInput[64], float vT, int vOffset)
+{
+    return (-1.0 / 3.0 * vT + 1.0 / 2.0 * vT * vT - 1.0 / 6.0 * vT * vT * vT) * vInput[vOffset + 0] +
+		(1.0 - vT * vT + 1.0 / 2.0 * (vT * vT * vT - vT)) * vInput[vOffset + 1] +
+		(vT + 1.0 / 2.0 * (vT * vT - vT * vT * vT)) * vInput[vOffset + 2] +
+		(1.0 / 6.0 * (vT * vT * vT - vT)) * vInput[vOffset + 3];
+}
+
+inline float biCubicBridson(float vInput[64], float vTx, float vTy, int vOffset)
+{
+    float ValueY[4] = { cubicBridson(vInput, vTx, vOffset + 0), cubicBridson(vInput, vTx, vOffset + 4), cubicBridson(vInput, vTx, vOffset + 8), cubicBridson(vInput, vTx, vOffset + 12) };
+    return cubicBridson(ValueY, vTy);
+}
+
+inline float triCubicBridson(float vInput[64], float vTx, float vTy, float vTz)
+{
+    float ValueZ[4] = { biCubicBridson(vInput, vTx, vTy, 0), biCubicBridson(vInput, vTx, vTy, 16), biCubicBridson(vInput, vTx, vTy, 32), biCubicBridson(vInput, vTx, vTy, 48) };
+    return cubicBridson(ValueZ, vTz);
+}
+
+inline float clampCubicBridson(float vInput[4], float vT)
+{
+    float TempValue = (-1.0 / 3.0 * vT + 1.0 / 2.0 * vT * vT - 1.0 / 6.0 * vT * vT * vT) * vInput[0] +
+		(1.0 - vT * vT + 1.0 / 2.0 * (vT * vT * vT - vT)) * vInput[1] +
+		(vT + 1.0 / 2.0 * (vT * vT - vT * vT * vT)) * vInput[2] +
+		(1.0 / 6.0 * (vT * vT * vT - vT)) * vInput[3];
+    
+    return clampCS(TempValue, vInput[1], vInput[2]);
+}
+
+inline float clampCubicBridson(float vInput[64], float vT, int vOffset)
+{
+    float TempValue = (-1.0 / 3.0 * vT + 1.0 / 2.0 * vT * vT - 1.0 / 6.0 * vT * vT * vT) * vInput[vOffset + 0] +
+		(1.0 - vT * vT + 1.0 / 2.0 * (vT * vT * vT - vT)) * vInput[vOffset + 1] +
+		(vT + 1.0 / 2.0 * (vT * vT - vT * vT * vT)) * vInput[vOffset + 2] +
+		(1.0 / 6.0 * (vT * vT * vT - vT)) * vInput[vOffset + 3];
+    
+    return clampCS(TempValue, vInput[vOffset + 1], vInput[vOffset + 2]);
+}
+
+inline float biClampCubicBridson(float vInput[64], float vTx, float vTy, int vOffset)
+{
+    float ValueY[4] = { clampCubicBridson(vInput, vTx, vOffset + 0), clampCubicBridson(vInput, vTx, vOffset + 4), clampCubicBridson(vInput, vTx, vOffset + 8), clampCubicBridson(vInput, vTx, vOffset + 12) };
+    return clampCubicBridson(ValueY, vTy);
+}
+
+inline float triClampCubicBridson(float vInput[64], float vTx, float vTy, float vTz)
+{
+    float ValueZ[4] = { biClampCubicBridson(vInput, vTx, vTy, 0), biClampCubicBridson(vInput, vTx, vTy, 16), biClampCubicBridson(vInput, vTx, vTy, 32), biClampCubicBridson(vInput, vTx, vTy, 48) };
+    return clampCubicBridson(ValueZ, vTz);
+}
+
+inline float catmullRom(float vInput[4], float vT)
+{
+    float Derivative1 = (vInput[2] - vInput[0]) / 2;
+    float Derivative2 = (vInput[3] - vInput[1]) / 2;
+    float Delta = vInput[2] - vInput[1];
+
+    float A3 = Derivative1 + Derivative2 - 2 * Delta;
+    float A2 = 3 * Delta - 2 * Derivative1 - Derivative2;
+    float A1 = Derivative1;
+    float A0 = vInput[1];
+
+    return A3 * vT * vT * vT + A2 * vT * vT + A1 * vT + A0;
+}
+
+inline float catmullRom(float vInput[64], float vT, int vOffset)
+{
+    float Derivative1 = (vInput[vOffset + 2] - vInput[vOffset + 0]) / 2;
+    float Derivative2 = (vInput[vOffset + 3] - vInput[vOffset + 1]) / 2;
+    float Delta = vInput[vOffset + 2] - vInput[vOffset + 1];
+
+    float A3 = Derivative1 + Derivative2 - 2 * Delta;
+    float A2 = 3 * Delta - 2 * Derivative1 - Derivative2;
+    float A1 = Derivative1;
+    float A0 = vInput[vOffset + 1];
+
+    return A3 * vT * vT * vT + A2 * vT * vT + A1 * vT + A0;
+}
+
+inline float biCatmullRom(float vInput[64], float vTx, float vTy, int vOffset)
+{
+    float ValueY[4] = { catmullRom(vInput, vTx, vOffset + 0), catmullRom(vInput, vTx, vOffset + 4), catmullRom(vInput, vTx, vOffset + 8), catmullRom(vInput, vTx, vOffset + 12) };
+    return catmullRom(ValueY, vTy);
+}
+
+inline float triCatmullRom(float vInput[64], float vTx, float vTy, float vTz)
+{
+    float ValueZ[4] = { biCatmullRom(vInput, vTx, vTy, 0), biCatmullRom(vInput, vTx, vTy, 16), biCatmullRom(vInput, vTx, vTy, 32), biCatmullRom(vInput, vTx, vTy, 48) };
+    return catmullRom(ValueZ, vTz);
+}
+
+inline float monotonicCatmullRom(float vInput[4], float vT)
+{
+    float Derivative1 = (vInput[2] - vInput[0]) / 2;
+    float Derivative2 = (vInput[3] - vInput[1]) / 2;
+    float Delta = vInput[2] - vInput[1];
+
+    if (abs(Delta) < FLT_EPSILON)
+    {
+        Derivative1 = 0;
+        Derivative2 = 0;
+    }
+    if (Delta * Derivative1 < 0)
+    {
+        Derivative1 = 0;
+    }
+    if (Delta * Derivative2 < 0)
+    {
+        Derivative2 = 0;
+    }
+
+    float A3 = Derivative1 + Derivative2 - 2 * Delta;
+    float A2 = 3 * Delta - 2 * Derivative1 - Derivative2;
+    float A1 = Derivative1;
+    float A0 = vInput[1];
+
+    return A3 * vT * vT * vT + A2 * vT * vT + A1 * vT + A0;
+}
+
+inline float monotonicCatmullRom(float vInput[64], float vT, int vOffset)
+{
+    float Derivative1 = (vInput[vOffset + 2] - vInput[vOffset + 0]) / 2;
+    float Derivative2 = (vInput[vOffset + 3] - vInput[vOffset + 1]) / 2;
+    float Delta = vInput[vOffset + 2] - vInput[vOffset + 1];
+
+    if (abs(Delta) < FLT_EPSILON)
+    {
+        Derivative1 = 0;
+        Derivative2 = 0;
+    }
+    if (Delta * Derivative1 < 0)
+    {
+        Derivative1 = 0;
+    }
+    if (Delta * Derivative2 < 0)
+    {
+        Derivative2 = 0;
+    }
+
+    float A3 = Derivative1 + Derivative2 - 2 * Delta;
+    float A2 = 3 * Delta - 2 * Derivative1 - Derivative2;
+    float A1 = Derivative1;
+    float A0 = vInput[vOffset + 1];
+
+    return A3 * vT * vT * vT + A2 * vT * vT + A1 * vT + A0;
+}
+
+inline float biMonotonicCatmullRom(float vInput[64], float vTx, float vTy, int vOffset)
+{
+    float ValueY[4] = { monotonicCatmullRom(vInput, vTx, vOffset + 0), monotonicCatmullRom(vInput, vTx, vOffset + 4), monotonicCatmullRom(vInput, vTx, vOffset + 8), monotonicCatmullRom(vInput, vTx, vOffset + 12) };
+    return monotonicCatmullRom(ValueY, vTy);
+}
+
+inline float triMonotonicCatmullRom(float vInput[64], float vTx, float vTy, float vTz)
+{
+    float ValueZ[4] = { biMonotonicCatmullRom(vInput, vTx, vTy, 0), biMonotonicCatmullRom(vInput, vTx, vTy, 16), biMonotonicCatmullRom(vInput, vTx, vTy, 32), biMonotonicCatmullRom(vInput, vTx, vTy, 48) };
+    return monotonicCatmullRom(ValueZ, vTz);
+}
+#endif

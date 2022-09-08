@@ -1,0 +1,410 @@
+#include "ShaderCommon.compute"
+
+#pragma kernel emitteVortexCollisionDensityAndTemperature
+#pragma kernel emitteVortexCollisionVelX
+#pragma kernel emitteVortexCollisionVelY
+#pragma kernel emitteVortexCollisionVelZ
+#pragma kernel emitteVortexLeapFroggingDensityAndTemperature
+#pragma kernel emitteVortexLeapFroggingVelX
+#pragma kernel emitteVortexLeapFroggingVelY
+#pragma kernel emitteVortexLeapFroggingVelZ
+#pragma kernel emitte2DSmokeDensityAndTemperature
+#pragma kernel emitte3DSmokeDensityAndTemperature
+#pragma kernel emitte2DSmokeVelX
+#pragma kernel emitte2DSmokeVelY
+#pragma kernel emitte2DSmokeVelZ
+
+float3 emitteVortexCollisionVelFuncA(float3 Pos)
+{
+    float3 Center = float3(0.04f, 0.2f, 0.2f);
+    float2 Dir = float2(Pos.y - Center.y, Pos.z - Center.z);
+    Dir = normalize(Dir);
+    float Theta = acos(dot(Dir, float2(1.0f, 0.0f)));
+    float Vel_x = 0.06f * (1.0f + 0.01f * cos(8.0f * Theta));
+    float Vel_y = 0.0f;
+    float Vel_z = 0.0f;
+    return float3(Vel_x, Vel_y, Vel_z);
+}
+
+float3 emitteVortexCollisionVelFuncB(float3 Pos)
+{
+    float3 Center = float3(0.16f, 0.2f, 0.2f);
+    float2 Dir = float2(Pos.y - Center.y, Pos.z - Center.z);
+    Dir = normalize(Dir);
+    float Theta = acos(dot(Dir, float2(1.0f, 0.0f)));
+    float Vel_x = -0.06f * (1.0f + 0.01f * cos(8.0f * Theta));
+    float Vel_y = 0.0f;
+    float Vel_z = 0.0f;
+    return float3(Vel_x, Vel_y, Vel_z);
+}
+
+bool judgmentFuncA(float3 vPos)
+{
+    float3 EmitterCenterPosA = float3(0.1f, 0.2f, 0.2f);
+    return (abs(vPos.x - EmitterCenterPosA.x) < 0.02f && length(vPos - EmitterCenterPosA) >= 0.03f && length(vPos - EmitterCenterPosA) <= 0.07f);
+}
+
+bool judgmentFuncB(float3 vPos)
+{
+    float3 EmitterCenterPosB = float3(0.2f, 0.2f, 0.2f);
+    return (abs(vPos.x - EmitterCenterPosB.x) < 0.02f && length(vPos - EmitterCenterPosB) >= 0.08f && length(vPos - EmitterCenterPosB) <= 0.12f);
+}
+
+bool judgmentFunc_2DSmokeEmitter(float3 vPos)
+{
+    float3 EmitterCenterPos = float3(3.1415926f, 2.0f, 0.0245437f);
+    return (length(vPos - EmitterCenterPos) <= 0.5f);
+}
+
+bool judgmentFunc_3DSmokeEmitter(float3 vPos)
+{
+    float3 EmitterCenterPos = float3(2.5f, 2.0f, 2.5f);
+    return (length(vPos - EmitterCenterPos) <= 0.390625f);
+}
+
+float EmitteDensity_emitte3DSmokeDensityAndTemperature;
+float EmitteTemperature_emitte3DSmokeDensityAndTemperature;
+RWStructuredBuffer<float> voDensityFieldData_emitte3DSmokeDensityAndTemperature;
+RWStructuredBuffer<float> voTemperatureFieldData_emitte3DSmokeDensityAndTemperature;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitte3DSmokeDensityAndTemperature(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = GridOrigin + 0.5f * GridSpacing + CurCoordIndex * GridSpacing;
+    
+    if (judgmentFunc_3DSmokeEmitter(CurPos))
+    {
+        voDensityFieldData_emitte3DSmokeDensityAndTemperature[CurLinearIndex] = EmitteDensity_emitte3DSmokeDensityAndTemperature;
+        voTemperatureFieldData_emitte3DSmokeDensityAndTemperature[CurLinearIndex] = EmitteTemperature_emitte3DSmokeDensityAndTemperature;
+    }
+}
+
+bool EmitterFlag_emitteVortexCollisionDensityAndTemperature = true;
+float EmitteDensity_emitteVortexCollisionDensityAndTemperature;
+float EmitteTemperature_emitteVortexCollisionDensityAndTemperature;
+RWStructuredBuffer<float> voDensityFieldData_emitteVortexCollisionDensityAndTemperature;
+RWStructuredBuffer<float> voTemperatureFieldData_emitteVortexCollisionDensityAndTemperature;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexCollisionDensityAndTemperature(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = GridOrigin + 0.5f * GridSpacing + CurCoordIndex * GridSpacing;
+
+    float3 EmitterPosA = float3(0.04f, 0.2f, 0.2f);
+    float3 EmitterPosB = float3(0.16f, 0.2f, 0.2f);
+    
+    if (EmitterFlag_emitteVortexCollisionDensityAndTemperature)
+    {
+        if (length(CurPos - EmitterPosA) <= 0.015f)
+        {
+            voDensityFieldData_emitteVortexCollisionDensityAndTemperature[CurLinearIndex] = EmitteDensity_emitteVortexCollisionDensityAndTemperature;
+            voTemperatureFieldData_emitteVortexCollisionDensityAndTemperature[CurLinearIndex] = EmitteTemperature_emitteVortexCollisionDensityAndTemperature;
+        }
+    }
+    else
+    {
+        if (length(CurPos - EmitterPosB) <= 0.015f)
+        {
+            voDensityFieldData_emitteVortexCollisionDensityAndTemperature[CurLinearIndex] = EmitteDensity_emitteVortexCollisionDensityAndTemperature;
+            voTemperatureFieldData_emitteVortexCollisionDensityAndTemperature[CurLinearIndex] = EmitteTemperature_emitteVortexCollisionDensityAndTemperature;
+        }
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataX_emitteVortexCollisionVelX;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexCollisionVelX(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + CurCoordIndex.x * GridSpacing.x, GridOrigin.y + (CurCoordIndex.y + 0.5f) * GridSpacing.y, GridOrigin.z + (CurCoordIndex.z + 0.5f) * GridSpacing.z);
+
+    float3 EmitterPosA = float3(0.04f, 0.2f, 0.2f);
+    float3 EmitterPosB = float3(0.16f, 0.2f, 0.2f);
+    
+    if (length(CurPos - EmitterPosA) <= 0.015f)
+    {
+        voFluidVelFieldDataX_emitteVortexCollisionVelX[CurLinearIndex] = emitteVortexCollisionVelFuncA(CurPos).x;
+    }
+    else if (length(CurPos - EmitterPosB) <= 0.015f)
+    {
+        voFluidVelFieldDataX_emitteVortexCollisionVelX[CurLinearIndex] = emitteVortexCollisionVelFuncB(CurPos).x;
+    }
+    else
+    {
+        
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataY_emitteVortexCollisionVelY;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexCollisionVelY(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + (CurCoordIndex.x + 0.5f) * GridSpacing.x, GridOrigin.y + CurCoordIndex.y * GridSpacing.y, GridOrigin.z + (CurCoordIndex.z + 0.5f) * GridSpacing.z);
+
+    float3 EmitterPosA = float3(0.04f, 0.2f, 0.2f);
+    float3 EmitterPosB = float3(0.16f, 0.2f, 0.2f);
+    
+    if (length(CurPos - EmitterPosA) <= 0.015f)
+    {
+        voFluidVelFieldDataY_emitteVortexCollisionVelY[CurLinearIndex] = emitteVortexCollisionVelFuncA(CurPos).y;
+    }
+    else if (length(CurPos - EmitterPosB) <= 0.015f)
+    {
+        voFluidVelFieldDataY_emitteVortexCollisionVelY[CurLinearIndex] = emitteVortexCollisionVelFuncB(CurPos).y;
+    }
+    else
+    {
+        
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataZ_emitteVortexCollisionVelZ;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexCollisionVelZ(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + (CurCoordIndex.x + 0.5f) * GridSpacing.x, GridOrigin.y + (CurCoordIndex.y + 0.5f) * GridSpacing.y, GridOrigin.z + CurCoordIndex.z * GridSpacing.z);
+
+    float3 EmitterPosA = float3(0.04f, 0.2f, 0.2f);
+    float3 EmitterPosB = float3(0.16f, 0.2f, 0.2f);
+    
+    if (length(CurPos - EmitterPosA) <= 0.015f)
+    {
+        voFluidVelFieldDataZ_emitteVortexCollisionVelZ[CurLinearIndex] = emitteVortexCollisionVelFuncA(CurPos).z;
+    }
+    else if (length(CurPos - EmitterPosB) <= 0.015f)
+    {
+        voFluidVelFieldDataZ_emitteVortexCollisionVelZ[CurLinearIndex] = emitteVortexCollisionVelFuncB(CurPos).z;
+    }
+    else
+    {
+        
+    }
+}
+
+bool EmitterFlag_emitteVortexLeapFroggingDensityAndTemperature = true;
+float EmitteDensity_emitteVortexLeapFroggingDensityAndTemperature;
+float EmitteTemperature_emitteVortexLeapFroggingDensityAndTemperature;
+RWStructuredBuffer<float> voDensityFieldData_emitteVortexLeapFroggingDensityAndTemperature;
+RWStructuredBuffer<float> voTemperatureFieldData_emitteVortexLeapFroggingDensityAndTemperature;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexLeapFroggingDensityAndTemperature(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = GridOrigin + 0.5f * GridSpacing + CurCoordIndex * GridSpacing;
+    
+    if (EmitterFlag_emitteVortexLeapFroggingDensityAndTemperature)
+    {
+        if (judgmentFuncA(CurPos))
+        {
+            voDensityFieldData_emitteVortexLeapFroggingDensityAndTemperature[CurLinearIndex] = EmitteDensity_emitteVortexLeapFroggingDensityAndTemperature;
+            voTemperatureFieldData_emitteVortexLeapFroggingDensityAndTemperature[CurLinearIndex] = EmitteTemperature_emitteVortexLeapFroggingDensityAndTemperature;
+        }
+    }
+    else
+    {
+        if (judgmentFuncB(CurPos))
+        {
+            voDensityFieldData_emitteVortexLeapFroggingDensityAndTemperature[CurLinearIndex] = EmitteDensity_emitteVortexLeapFroggingDensityAndTemperature;
+            voTemperatureFieldData_emitteVortexLeapFroggingDensityAndTemperature[CurLinearIndex] = EmitteTemperature_emitteVortexLeapFroggingDensityAndTemperature;
+        }
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataX_emitteVortexLeapFroggingVelX;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexLeapFroggingVelX(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + CurCoordIndex.x * GridSpacing.x, GridOrigin.y + (CurCoordIndex.y + 0.5f) * GridSpacing.y, GridOrigin.z + (CurCoordIndex.z + 0.5f) * GridSpacing.z);
+    
+    if (judgmentFuncA(CurPos))
+    {
+        voFluidVelFieldDataX_emitteVortexLeapFroggingVelX[CurLinearIndex] = 0.2f;
+    }
+    else if (judgmentFuncB(CurPos))
+    {
+        voFluidVelFieldDataX_emitteVortexLeapFroggingVelX[CurLinearIndex] = 0.0f;
+    }
+    else
+    {
+        
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataY_emitteVortexLeapFroggingVelY;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexLeapFroggingVelY(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + (CurCoordIndex.x + 0.5f) * GridSpacing.x, GridOrigin.y + CurCoordIndex.y * GridSpacing.y, GridOrigin.z + (CurCoordIndex.z + 0.5f) * GridSpacing.z);
+
+    if (judgmentFuncA(CurPos))
+    {
+        voFluidVelFieldDataY_emitteVortexLeapFroggingVelY[CurLinearIndex] = 0.0f;
+    }
+    else if (judgmentFuncB(CurPos))
+    {
+        voFluidVelFieldDataY_emitteVortexLeapFroggingVelY[CurLinearIndex] = 0.0f;
+    }
+    else
+    {
+        
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataZ_emitteVortexLeapFroggingVelZ;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitteVortexLeapFroggingVelZ(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + (CurCoordIndex.x + 0.5f) * GridSpacing.x, GridOrigin.y + (CurCoordIndex.y + 0.5f) * GridSpacing.y, GridOrigin.z + CurCoordIndex.z * GridSpacing.z);
+    
+    if (judgmentFuncA(CurPos))
+    {
+        voFluidVelFieldDataZ_emitteVortexLeapFroggingVelZ[CurLinearIndex] = 0.0f;
+    }
+    else if (judgmentFuncB(CurPos))
+    {
+        voFluidVelFieldDataZ_emitteVortexLeapFroggingVelZ[CurLinearIndex] = 0.0f;
+    }
+    else
+    {
+        
+    }
+}
+
+float EmitteDensity_emitte2DSmokeDensityAndTemperature;
+float EmitteTemperature_emitte2DSmokeDensityAndTemperature;
+RWStructuredBuffer<float> voDensityFieldData_emitte2DSmokeDensityAndTemperature;
+RWStructuredBuffer<float> voTemperatureFieldData_emitte2DSmokeDensityAndTemperature;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitte2DSmokeDensityAndTemperature(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = GridOrigin + 0.5f * GridSpacing + CurCoordIndex * GridSpacing;
+    
+    if (judgmentFunc_2DSmokeEmitter(CurPos))
+    {
+        voDensityFieldData_emitte2DSmokeDensityAndTemperature[CurLinearIndex] = EmitteDensity_emitte2DSmokeDensityAndTemperature;
+        voTemperatureFieldData_emitte2DSmokeDensityAndTemperature[CurLinearIndex] = EmitteTemperature_emitte2DSmokeDensityAndTemperature;
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataX_emitte2DSmokeVelX;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitte2DSmokeVelX(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + CurCoordIndex.x * GridSpacing.x, GridOrigin.y + (CurCoordIndex.y + 0.5f) * GridSpacing.y, GridOrigin.z + (CurCoordIndex.z + 0.5f) * GridSpacing.z);
+    
+    if (judgmentFunc_2DSmokeEmitter(CurPos))
+    {
+        voFluidVelFieldDataX_emitte2DSmokeVelX[CurLinearIndex] = 0.0f;
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataY_emitte2DSmokeVelY;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitte2DSmokeVelY(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + (CurCoordIndex.x + 0.5f) * GridSpacing.x, GridOrigin.y + CurCoordIndex.y * GridSpacing.y, GridOrigin.z + (CurCoordIndex.z + 0.5f) * GridSpacing.z);
+
+    if (judgmentFunc_2DSmokeEmitter(CurPos))
+    {
+        voFluidVelFieldDataY_emitte2DSmokeVelY[CurLinearIndex] = 1.0f;
+    }
+}
+
+RWStructuredBuffer<float> voFluidVelFieldDataZ_emitte2DSmokeVelZ;
+[numthreads(NUMTHREADS, 1, 1)]
+void emitte2DSmokeVelZ(uint3 id : SV_DispatchThreadID)
+{
+    int CurLinearIndex = (int) id.x;
+
+    if (CurLinearIndex >= TotalThreadNum)
+        return;
+    
+    int3 CurCoordIndex = transLinearIndex2Coord(CurLinearIndex, GridResolution);
+    
+    float3 CurPos = float3(GridOrigin.x + (CurCoordIndex.x + 0.5f) * GridSpacing.x, GridOrigin.y + (CurCoordIndex.y + 0.5f) * GridSpacing.y, GridOrigin.z + CurCoordIndex.z * GridSpacing.z);
+    
+    if (judgmentFunc_2DSmokeEmitter(CurPos))
+    {
+        voFluidVelFieldDataZ_emitte2DSmokeVelZ[CurLinearIndex] = 0.0f;
+    }
+}
