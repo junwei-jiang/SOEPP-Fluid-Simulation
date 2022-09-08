@@ -12,3 +12,16 @@ In this paper, we propose a novel second-order explicit midpoint method to addre
 
 #### Compile and Run
 The project is built by Unity, and the parallel computing part uses Compute Shader. The versions of C + + and CUDA are in another project (only the basic engine is implemented, and there is no specific algorithm). Visualization may require Python, OpenVDB and Houdini. The code is not neat enough. If you have any questions, please ask me. My Email is 947205526@qq.com
+
+#### Paper Videos
+[![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)](https://www.youtube.com/watch?v=qa5ktKb7NkE)
+
+#### Other Videos
+
+The following videos were generated using this engine:
+
+|             *Complex Dynamic Boundary*             |    *SDF field visualization*    |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)](https://www.youtube.com/watch?v=qa5ktKb7NkE) | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)](https://www.youtube.com/watch?v=7Rut2-70xjY) 
+|             *Dam*             |    *Overflow Weir*    |
+| [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)](https://www.youtube.com/watch?v=qa5ktKb7NkE) | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)](https://www.youtube.com/watch?v=7Rut2-70xjY)  |
