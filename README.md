@@ -4,7 +4,7 @@
 
 #### Accepted by ACM SIGGRAPH / Eurographics Symposium on Computer Animation 2022 / CGF
 
-#### ![Figure1_CoverPicture](D:\My_Project\UnityProject\SOEPP-Fluid-Simulation\PaperMaterials\图表\Figure1_CoverPicture.png)Description
+![image](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Figure1_CoverPicture.png)
 
 {**When you're done, you can delete the content in this README and update the file with details for others getting started with your repository**}
 
