@@ -20,8 +20,12 @@ The project is built by Unity, and the parallel computing part uses Compute Shad
 
 The following videos were generated using this engine:
 
+|             *Dam Break PIC*             |    *Dam Break FLIP*    |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Dam%20Break%20PIC.png)](https://www.youtube.com/watch?v=gkT8r-dx-Oc) | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Dam%20Break%20FLIP.png)](https://www.youtube.com/watch?v=ap1wn4v9Y0I)
 |             *Complex Dynamic Boundary*             |    *SDF field visualization*    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Complex%20Dynamic%20Boundary.png)](https://www.youtube.com/watch?v=2p0gEe0cDX0) | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/SDF%20field%20visualization.png)](https://www.youtube.com/watch?v=YwoxHR0Mffw) 
 |             *Dam*             |    *Overflow Weir*    |
-| [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Dam.png)](https://www.youtube.com/watch?v=WP8THyQTKhI) | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Overflow%20Weir.png)](https://www.youtube.com/watch?v=aNk-95Fd9eY)  |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Dam.png)](https://www.youtube.com/watch?v=WP8THyQTKhI) | [![Video](https://github.com/junwei-jiang/SOEPP-Fluid-Simulation/blob/main/images/Overflow%20Weir.png)](https://www.youtube.com/watch?v=aNk-95Fd9eY) 
